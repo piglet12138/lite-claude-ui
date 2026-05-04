@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
+  <title id="title">Claude</title>
+  <desc id="desc">Warm radial assistant mark.</desc>
+  <rect width="96" height="96" rx="24" fill="#f4efe7"/>
+  <g transform="translate(48 48)">
+    <g fill="#c96342">
+      <ellipse rx="9.5" ry="27" transform="rotate(0) translate(0 -18)"/>
+      <ellipse rx="9.5" ry="27" transform="rotate(45) translate(0 -18)"/>
+      <ellipse rx="9.5" ry="27" transform="rotate(90) translate(0 -18)"/>
+      <ellipse rx="9.5" ry="27" transform="rotate(135) translate(0 -18)"/>
+      <ellipse rx="9.5" ry="27" transform="rotate(180) translate(0 -18)"/>
+      <ellipse rx="9.5" ry="27" transform="rotate(225) translate(0 -18)"/>
+      <ellipse rx="9.5" ry="27" transform="rotate(270) translate(0 -18)"/>
+      <ellipse rx="9.5" ry="27" transform="rotate(315) translate(0 -18)"/>
+    </g>
+    <circle r="19" fill="#f4efe7"/>
+    <g fill="#c96342" opacity=".96">
+      <ellipse rx="6.5" ry="16" transform="rotate(22.5) translate(0 -10)"/>
+      <ellipse rx="6.5" ry="16" transform="rotate(67.5) translate(0 -10)"/>
+      <ellipse rx="6.5" ry="16" transform="rotate(112.5) translate(0 -10)"/>
+      <ellipse rx="6.5" ry="16" transform="rotate(157.5) translate(0 -10)"/>
+      <ellipse rx="6.5" ry="16" transform="rotate(202.5) translate(0 -10)"/>
+      <ellipse rx="6.5" ry="16" transform="rotate(247.5) translate(0 -10)"/>
+      <ellipse rx="6.5" ry="16" transform="rotate(292.5) translate(0 -10)"/>
+      <ellipse rx="6.5" ry="16" transform="rotate(337.5) translate(0 -10)"/>
+    </g>
+    <circle r="7.5" fill="#f4efe7"/>
+  </g>
+</svg>

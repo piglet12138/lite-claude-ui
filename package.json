@@ -1,0 +1,13 @@
+{
+  "name": "lite-claude-ui",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check public/app.js && node --check src/worker.js"
+  },
+  "dependencies": {
+    "mammoth": "^1.12.0"
+  }
+}

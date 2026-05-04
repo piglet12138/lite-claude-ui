@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Claude</title>
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css?v=20260504-image-preview2" />
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <aside class="sidebar" aria-label="对话">
+        <div class="brand">
+          <img class="brand-logo" src="/logo.svg" alt="" width="28" height="28" />
+          <span>Claude</span>
+        </div>
+        <button id="newChat" class="primary-nav" type="button">
+          <span class="icon plus" aria-hidden="true"></span>
+          新对话
+        </button>
+        <div class="nav-label">最近</div>
+        <div id="threadList" class="thread-list"></div>
+        <div class="nav-label">文档</div>
+        <div id="documentList" class="thread-list document-list"></div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <button id="sidebarToggle" class="icon-button mobile-only" type="button" aria-label="切换侧栏">
+            <span class="icon menu" aria-hidden="true"></span>
+          </button>
+          <div>
+            <div class="model-pill">Claude Opus 4.7</div>
+          </div>
+          <div class="top-actions">
+            <button id="toggleDocPanel" class="ghost-button" type="button">文档</button>
+            <button id="copyDoc" class="ghost-button" type="button">复制文档</button>
+            <button id="logout" class="icon-button" type="button" aria-label="退出登录">
+              <span class="icon logout" aria-hidden="true"></span>
+            </button>
+          </div>
+        </header>
+
+        <section id="loginView" class="login-view hidden" aria-label="登录">
+          <div class="login-card">
+            <img class="brand-logo large" src="/logo.svg" alt="" width="42" height="42" />
+            <h1>登录 Claude</h1>
+            <p>继续进入你的文档工作台。</p>
+            <form id="loginForm" class="login-form">
+              <label>
+                账号
+                <input name="email" autocomplete="username" required />
+              </label>
+              <label>
+                密码
+                <input name="password" type="password" autocomplete="current-password" required />
+              </label>
+              <button class="submit-button" type="submit">继续</button>
+              <div id="loginError" class="form-error" role="alert"></div>
+            </form>
+          </div>
+        </section>
+
+        <section id="chatView" class="chat-view hidden">
+          <div class="chat-column">
+            <section id="hero" class="hero">
+              <h1>今天想聊什么？</h1>
+              <p>一起写作、学习、编程，或者整理你的想法。</p>
+              <div class="starter-grid">
+                <button class="starter" data-prompt="请帮我起草一份高质量文档。先给完整成稿，结构包含背景、目标、核心内容、风险和下一步。主题是：">
+                  <strong>起草文档</strong>
+                  <span>从想法变成可交付成稿。</span>
+                </button>
+                <button class="starter" data-prompt="下面是一段 Google Docs 草稿。请保留原意，改写成更清晰、更自然、更适合协作审阅的版本：\n\n">
+                  <strong>改写 Docs</strong>
+                  <span>重排结构，压缩废话。</span>
+                </button>
+                <button class="starter" data-prompt="请审校下面这份文档。先指出最高优先级问题，再给重排后的大纲，最后给可替换版本：\n\n">
+                  <strong>审校结构</strong>
+                  <span>找出断点、重复和遗漏。</span>
+                </button>
+              </div>
+            </section>
+
+            <div id="messages" class="messages" aria-live="polite"></div>
+
+            <form id="composer" class="composer">
+              <div id="attachmentBar" class="attachment-bar"></div>
+              <textarea id="prompt" rows="1" placeholder="发消息给 Claude"></textarea>
+              <div class="composer-actions">
+                <label class="tool-button" title="上传文本或 Google Docs 导出的 HTML">
+                  <input id="fileInput" type="file" multiple accept="image/*,.txt,.md,.markdown,.csv,.json,.html,.htm,.xml,.log,.yaml,.yml,.docx" />
+                  <span class="icon attach" aria-hidden="true"></span>
+                </label>
+                <button id="webSearchToggle" class="tool-button text-tool" type="button" aria-pressed="false">搜索</button>
+                <button id="send" class="send-button" type="submit" aria-label="发送">
+                  <span class="icon arrow-up" aria-hidden="true"></span>
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <aside id="docPanel" class="doc-panel collapsed" aria-label="文档预览">
+            <div class="doc-panel-header">
+              <div>
+                <strong id="docTitle">Artifact</strong>
+                <span id="docMeta">需要时自动生成</span>
+              </div>
+              <div class="doc-actions">
+                <div class="artifact-tabs" role="tablist" aria-label="Artifact 视图">
+                  <button id="artifactPreviewTab" class="artifact-tab active" type="button">预览</button>
+                  <button id="artifactSourceTab" class="artifact-tab" type="button">源码</button>
+                </div>
+                <button id="downloadHtml" class="ghost-button" type="button">下载 HTML</button>
+                <button id="downloadDoc" class="ghost-button" type="button">下载</button>
+                <button id="closeDocPanel" class="icon-button" type="button" aria-label="关闭文档面板">×</button>
+              </div>
+            </div>
+            <article id="docPreview" class="doc-preview">
+              <p class="empty-doc">当对话生成文档时，会在这里打开精排预览。</p>
+            </article>
+          </aside>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js?v=20260504-image-preview2" type="module"></script>
+  </body>
+</html>
