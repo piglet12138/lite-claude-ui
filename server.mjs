@@ -157,9 +157,14 @@ async function googleStatus(res) {
 
 function startGoogleAuth(req, res) {
   if (!googleConfigured()) return html(res, googleCallbackPage("Google OAuth 未配置", "请先在 .env 中配置 GOOGLE_CLIENT_ID 和 GOOGLE_CLIENT_SECRET。"), 500);
+  const url = new URL(req.url || "/", "http://localhost");
   const redirectUri = getGoogleRedirectUri(req);
   const state = crypto.randomBytes(24).toString("base64url");
-  googleOauthStates.set(state, { createdAt: Date.now(), redirectUri });
+  googleOauthStates.set(state, {
+    createdAt: Date.now(),
+    redirectUri,
+    mode: url.searchParams.get("mode") === "redirect" ? "redirect" : "popup",
+  });
   cleanupGoogleStates();
   const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   authUrl.searchParams.set("client_id", googleClientId);
@@ -207,7 +212,14 @@ async function googleCallback(req, res, url) {
     refresh_token: token.refresh_token || existing?.refresh_token,
     expiry_date: Date.now() + Math.max(30, Number(token.expires_in || 3600) - 60) * 1000,
   });
-  return html(res, googleCallbackPage("Google Docs 已连接", "你可以关闭这个窗口并回到文档上传。"));
+  return html(
+    res,
+    googleCallbackPage(
+      "Google Docs 已连接",
+      stateData.mode === "redirect" ? "正在返回并继续上传文档。" : "你可以关闭这个窗口并回到文档上传。",
+      stateData.mode,
+    ),
+  );
 }
 
 async function uploadGoogleDoc(res, body) {
@@ -662,8 +674,12 @@ function ensureUploadHtml(value, title) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body>${input}</body></html>`;
 }
 
-function googleCallbackPage(title, detail) {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><style>body{margin:0;display:grid;min-height:100vh;place-items:center;background:#f7f3ec;color:#2d251d;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.box{max-width:420px;border:1px solid #ddd2c3;border-radius:14px;background:#fffaf2;padding:26px;box-shadow:0 12px 34px rgba(45,37,29,.1)}h1{margin:0 0 10px;font-size:22px}p{margin:0;color:#766b5f;line-height:1.6}</style></head><body><main class="box"><h1>${escapeHtml(title)}</h1><p>${detail}</p></main><script>try{window.opener&&window.opener.postMessage({type:"google-auth-complete"},"*");setTimeout(()=>window.close(),900)}catch{}</script></body></html>`;
+function googleCallbackPage(title, detail, mode = "popup") {
+  const script =
+    mode === "redirect"
+      ? "setTimeout(()=>location.replace('/?google=connected'),700)"
+      : "try{window.opener&&window.opener.postMessage({type:'google-auth-complete'},'*');setTimeout(()=>window.close(),900)}catch{}";
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><style>body{margin:0;display:grid;min-height:100vh;place-items:center;background:#f7f3ec;color:#2d251d;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.box{max-width:420px;border:1px solid #ddd2c3;border-radius:14px;background:#fffaf2;padding:26px;box-shadow:0 12px 34px rgba(45,37,29,.1)}h1{margin:0 0 10px;font-size:22px}p{margin:0;color:#766b5f;line-height:1.6}</style></head><body><main class="box"><h1>${escapeHtml(title)}</h1><p>${detail}</p></main><script>${script}</script></body></html>`;
 }
 
 function safeDriveName(name) {

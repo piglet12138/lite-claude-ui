@@ -48,6 +48,7 @@ const els = {
   webSearchToggle: document.querySelector("#webSearchToggle"),
 };
 
+const PENDING_GOOGLE_UPLOAD_KEY = "lite-claude-pending-google-upload";
 let streamRenderQueued = false;
 
 init();
@@ -146,6 +147,7 @@ function showChat() {
   if (!state.threads.length) createThread();
   state.activeId ||= state.threads[0].id;
   render();
+  resumePendingGoogleUpload();
 }
 
 function createThread() {
@@ -664,17 +666,11 @@ async function uploadCurrentDocToGoogle() {
   els.uploadGoogleDoc.disabled = true;
   try {
     els.uploadGoogleDoc.textContent = "连接 Google...";
-    const connected = await ensureGoogleConnected();
-    if (!connected) throw new Error("Google 授权未完成");
     const html = doc.type === "html" ? doc.content : documentHtml(doc);
+    const connected = await ensureGoogleConnected({ title: doc.title, html });
+    if (!connected) return;
     els.uploadGoogleDoc.textContent = "上传中...";
-    const response = await fetch("/api/google/upload-doc", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: doc.title, html }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || data.detail?.error?.message || "上传失败");
+    const data = await uploadGoogleDocPayload({ title: doc.title, html });
     els.uploadGoogleDoc.textContent = "已上传";
     if (data.file?.webViewLink) window.open(data.file.webViewLink, "_blank", "noopener,noreferrer");
     setTimeout(() => (els.uploadGoogleDoc.textContent = originalText), 1400);
@@ -686,42 +682,62 @@ async function uploadCurrentDocToGoogle() {
   }
 }
 
-async function ensureGoogleConnected() {
+async function ensureGoogleConnected(pendingUpload) {
   const status = await fetchJson("/api/google/status");
   if (!status.configured) throw new Error("未配置 Google OAuth");
   if (status.connected) return true;
-  const popup = window.open("/api/google/auth/start", "google-auth", "width=540,height=720");
-  if (!popup) throw new Error("浏览器拦截了授权窗口");
-  return waitForGoogleConnection(popup);
+  sessionStorage.setItem(
+    PENDING_GOOGLE_UPLOAD_KEY,
+    JSON.stringify({
+      ...pendingUpload,
+      createdAt: Date.now(),
+    }),
+  );
+  window.location.href = "/api/google/auth/start?mode=redirect";
+  return false;
 }
 
-function waitForGoogleConnection(popup) {
-  return new Promise((resolve) => {
-    let done = false;
-    let timer = 0;
-    const finish = (value) => {
-      if (done) return;
-      done = true;
-      window.removeEventListener("message", onMessage);
-      clearInterval(timer);
-      resolve(value);
-    };
-    const onMessage = (event) => {
-      if (event.data?.type === "google-auth-complete") finish(true);
-    };
-    window.addEventListener("message", onMessage);
-    const started = Date.now();
-    timer = setInterval(async () => {
-      if (popup.closed && Date.now() - started > 1500) {
-        const status = await fetchJson("/api/google/status").catch(() => ({ connected: false }));
-        finish(Boolean(status.connected));
-        return;
-      }
-      if (Date.now() - started > 120000) finish(false);
-      const status = await fetchJson("/api/google/status").catch(() => ({ connected: false }));
-      if (status.connected) finish(true);
-    }, 1000);
+async function resumePendingGoogleUpload() {
+  const pending = loadPendingGoogleUpload();
+  if (!pending) return;
+  sessionStorage.removeItem(PENDING_GOOGLE_UPLOAD_KEY);
+  state.docOpen = true;
+  renderDocumentPanel();
+  els.uploadGoogleDoc.textContent = "上传中...";
+  els.uploadGoogleDoc.disabled = true;
+  try {
+    const data = await uploadGoogleDocPayload(pending);
+    els.uploadGoogleDoc.textContent = "已上传";
+    if (data.file?.webViewLink) window.open(data.file.webViewLink, "_blank", "noopener,noreferrer");
+  } catch (error) {
+    els.uploadGoogleDoc.textContent = String(error.message || error).slice(0, 18);
+  } finally {
+    setTimeout(() => {
+      els.uploadGoogleDoc.textContent = "上传 Docs";
+      els.uploadGoogleDoc.disabled = false;
+    }, 1800);
+  }
+}
+
+function loadPendingGoogleUpload() {
+  try {
+    const pending = JSON.parse(sessionStorage.getItem(PENDING_GOOGLE_UPLOAD_KEY) || "null");
+    if (!pending?.html || Date.now() - Number(pending.createdAt || 0) > 10 * 60_000) return null;
+    return { title: pending.title || "Untitled document", html: pending.html };
+  } catch {
+    return null;
+  }
+}
+
+async function uploadGoogleDocPayload(payload) {
+  const response = await fetch("/api/google/upload-doc", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
   });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || data.detail?.error?.message || "上传失败");
+  return data;
 }
 
 function autosize() {
