@@ -15,7 +15,7 @@
 - Closeable document panel that does not fight the user while generation continues.
 - Upload images and paste screenshots directly into the composer.
 - Sent image thumbnails in the chat history.
-- Import `.docx` files exported from Google Docs or Word via `mammoth`.
+- Import `.docx` files exported from Google Docs or Word, preserving headings, lists, tables, links and inline images in the preview.
 - Download generated documents as Markdown or HTML.
 - Copy assistant replies and generated documents.
 - Optional Brave Search integration for web-search-assisted answers.

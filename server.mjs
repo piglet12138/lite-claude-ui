@@ -94,11 +94,31 @@ server.listen(port, "127.0.0.1", () => {
 async function importDocx(req, res) {
   const buffer = await readBuffer(req, 16 * 1024 * 1024);
   const mammoth = await import("mammoth");
-  const result = await mammoth.extractRawText({ buffer });
-  const content = String(result.value || "").trim();
+  const [htmlResult, textResult] = await Promise.all([
+    mammoth.convertToHtml(
+      { buffer },
+      {
+        convertImage: mammoth.images.imgElement(async (image) => ({
+          src: `data:${image.contentType};base64,${await image.read("base64")}`,
+        })),
+        styleMap: [
+          "p[style-name='Title'] => h1:fresh",
+          "p[style-name='Subtitle'] => p.subtitle:fresh",
+          "p[style-name='Heading 1'] => h1:fresh",
+          "p[style-name='Heading 2'] => h2:fresh",
+          "p[style-name='Heading 3'] => h3:fresh",
+          "p[style-name='Quote'] => blockquote:fresh",
+        ],
+      },
+    ),
+    mammoth.extractRawText({ buffer }),
+  ]);
+  const content = String(textResult.value || "").trim();
+  const html = wrapDocxHtml(String(htmlResult.value || ""), decodeURIComponent(req.headers["x-file-name"] || "Document"));
   return json(res, {
     content,
-    warnings: (result.messages || []).map((message) => String(message.message || message)).slice(0, 5),
+    html,
+    warnings: [...(htmlResult.messages || []), ...(textResult.messages || [])].map((message) => String(message.message || message)).slice(0, 8),
   });
 }
 
@@ -389,6 +409,67 @@ async function readBuffer(req, maxBytes) {
 function json(res, body, status = 200) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(body));
+}
+
+function wrapDocxHtml(fragment, title) {
+  const body = String(fragment || "").trim() || "<p>这个文档没有可提取的正文内容。</p>";
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(String(title || "Document").replace(/\.[^.]+$/, ""))}</title>
+  <style>
+    :root { color-scheme: light; }
+    body {
+      margin: 0;
+      background: #f4efe7;
+      color: #2d251d;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.72;
+    }
+    main {
+      max-width: 820px;
+      margin: 34px auto;
+      border: 1px solid #e4d7c6;
+      border-radius: 14px;
+      background: #fffaf2;
+      padding: 42px 48px;
+      box-shadow: 0 12px 34px rgba(45, 37, 29, 0.08);
+    }
+    h1, h2, h3 { color: #2d251d; line-height: 1.24; }
+    h1 { margin: 0 0 22px; padding-bottom: 12px; border-bottom: 1px solid #eadfcc; font-size: 30px; }
+    h2 { margin-top: 30px; font-size: 22px; }
+    h3 { margin-top: 24px; font-size: 17px; }
+    p { margin: 0 0 14px; }
+    .subtitle { color: #766b5f; font-size: 18px; }
+    ul, ol { padding-left: 1.45em; }
+    li { margin: 5px 0; }
+    table { width: 100%; margin: 18px 0; border-collapse: collapse; border: 1px solid #e4d7c6; }
+    th, td { border: 1px solid #e4d7c6; padding: 10px 11px; text-align: left; vertical-align: top; }
+    th { background: #f3eadc; }
+    blockquote { margin: 18px 0; border-left: 4px solid #bd5d3a; border-radius: 8px; background: #f8f1e8; padding: 12px 14px; color: #4e4034; }
+    img { max-width: 100%; height: auto; border-radius: 8px; }
+    a { color: #93482d; }
+    code, pre { border-radius: 8px; background: #eee4d6; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    pre { overflow: auto; padding: 12px; }
+    @media (max-width: 760px) {
+      main { margin: 0; min-height: 100vh; border: 0; border-radius: 0; padding: 28px 22px; }
+    }
+  </style>
+</head>
+<body>
+  <main>${body}</main>
+</body>
+</html>`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 function notFound(res) {

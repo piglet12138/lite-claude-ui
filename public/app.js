@@ -511,8 +511,15 @@ async function addFileAttachment(file) {
     return;
   }
   if (lower.endsWith(".docx")) {
-    const content = await convertDocx(file).catch((error) => `无法读取这个 .docx：${String(error.message || error)}`);
-    addUploadedDocument(file.name.replace(/\.[^.]+$/, ""), content, "上传的 Google Docs/Word", "document");
+    const imported = await convertDocx(file).catch((error) => ({
+      content: `无法读取这个 .docx：${String(error.message || error)}`,
+      html: "",
+      failed: true,
+    }));
+    const title = file.name.replace(/\.[^.]+$/, "");
+    const content = String(imported.content || "").slice(0, 100000);
+    const html = String(imported.html || "");
+    addUploadedDocument(title, html || content, imported.failed ? "导入失败" : "上传的 Google Docs/Word", html ? "html" : "document");
     state.attachments.push({ id: crypto.randomUUID(), name: file.name, kind: "document", content });
     return;
   }
@@ -598,7 +605,11 @@ async function convertDocx(file) {
   });
   if (!response.ok) throw new Error(await response.text());
   const data = await response.json();
-  return String(data.content || "").slice(0, 100000);
+  return {
+    content: String(data.content || "").slice(0, 100000),
+    html: String(data.html || "").slice(0, 500000),
+    warnings: Array.isArray(data.warnings) ? data.warnings : [],
+  };
 }
 
 function addUploadedDocument(title, content, source, type = "document") {
@@ -606,7 +617,7 @@ function addUploadedDocument(title, content, source, type = "document") {
     id: crypto.randomUUID(),
     threadId: "",
     title,
-    content: String(content || "").slice(0, 100000),
+    content: String(content || "").slice(0, type === "html" ? 500000 : 100000),
     type,
     language: type === "html" ? "html" : "markdown",
     source,
