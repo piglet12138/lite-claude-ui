@@ -35,6 +35,7 @@ const els = {
   copyDoc: document.querySelector("#copyDoc"),
   downloadDoc: document.querySelector("#downloadDoc"),
   downloadHtml: document.querySelector("#downloadHtml"),
+  uploadGoogleDoc: document.querySelector("#uploadGoogleDoc"),
   docPanel: document.querySelector("#docPanel"),
   docTitle: document.querySelector("#docTitle"),
   docMeta: document.querySelector("#docMeta"),
@@ -85,6 +86,7 @@ function wireEvents() {
   els.copyDoc.addEventListener("click", copyCurrentDoc);
   els.downloadDoc.addEventListener("click", () => downloadCurrentDoc("markdown"));
   els.downloadHtml.addEventListener("click", () => downloadCurrentDoc("html"));
+  els.uploadGoogleDoc.addEventListener("click", uploadCurrentDocToGoogle);
   els.artifactPreviewTab.addEventListener("click", () => setArtifactView("preview"));
   els.artifactSourceTab.addEventListener("click", () => setArtifactView("source"));
   els.closeDocPanel.addEventListener("click", () => {
@@ -349,6 +351,7 @@ function renderDocumentPanel() {
   els.docMeta.textContent = artifactMeta(doc);
   els.downloadHtml.classList.toggle("hidden", doc.type !== "document" && doc.type !== "html");
   els.downloadDoc.textContent = doc.type === "html" ? "下载源码" : "下载";
+  els.uploadGoogleDoc.disabled = false;
   els.artifactPreviewTab.classList.toggle("active", doc.view === "preview");
   els.artifactSourceTab.classList.toggle("active", doc.view === "source");
   els.artifactPreviewTab.disabled = doc.type === "code";
@@ -652,6 +655,73 @@ function downloadCurrentDoc(format) {
   a.download = doc.filePath || `${safeFilename(doc.title)}.${format === "html" || isHtmlArtifact ? "html" : "md"}`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+async function uploadCurrentDocToGoogle() {
+  const doc = activeDocument();
+  if (!doc) return;
+  const originalText = els.uploadGoogleDoc.textContent;
+  els.uploadGoogleDoc.disabled = true;
+  try {
+    els.uploadGoogleDoc.textContent = "连接 Google...";
+    const connected = await ensureGoogleConnected();
+    if (!connected) throw new Error("Google 授权未完成");
+    const html = doc.type === "html" ? doc.content : documentHtml(doc);
+    els.uploadGoogleDoc.textContent = "上传中...";
+    const response = await fetch("/api/google/upload-doc", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: doc.title, html }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || data.detail?.error?.message || "上传失败");
+    els.uploadGoogleDoc.textContent = "已上传";
+    if (data.file?.webViewLink) window.open(data.file.webViewLink, "_blank", "noopener,noreferrer");
+    setTimeout(() => (els.uploadGoogleDoc.textContent = originalText), 1400);
+  } catch (error) {
+    els.uploadGoogleDoc.textContent = String(error.message || error).slice(0, 18);
+    setTimeout(() => (els.uploadGoogleDoc.textContent = originalText), 2200);
+  } finally {
+    els.uploadGoogleDoc.disabled = false;
+  }
+}
+
+async function ensureGoogleConnected() {
+  const status = await fetchJson("/api/google/status");
+  if (!status.configured) throw new Error("未配置 Google OAuth");
+  if (status.connected) return true;
+  const popup = window.open("/api/google/auth/start", "google-auth", "width=540,height=720");
+  if (!popup) throw new Error("浏览器拦截了授权窗口");
+  return waitForGoogleConnection(popup);
+}
+
+function waitForGoogleConnection(popup) {
+  return new Promise((resolve) => {
+    let done = false;
+    let timer = 0;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("message", onMessage);
+      clearInterval(timer);
+      resolve(value);
+    };
+    const onMessage = (event) => {
+      if (event.data?.type === "google-auth-complete") finish(true);
+    };
+    window.addEventListener("message", onMessage);
+    const started = Date.now();
+    timer = setInterval(async () => {
+      if (popup.closed && Date.now() - started > 1500) {
+        const status = await fetchJson("/api/google/status").catch(() => ({ connected: false }));
+        finish(Boolean(status.connected));
+        return;
+      }
+      if (Date.now() - started > 120000) finish(false);
+      const status = await fetchJson("/api/google/status").catch(() => ({ connected: false }));
+      if (status.connected) finish(true);
+    }, 1000);
+  });
 }
 
 function autosize() {

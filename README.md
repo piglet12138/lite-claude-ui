@@ -17,6 +17,7 @@
 - Sent image thumbnails in the chat history.
 - Import `.docx` files exported from Google Docs or Word, preserving headings, lists, tables, links and inline images in the preview.
 - Download generated documents as Markdown or HTML.
+- Upload generated documents to Google Docs through Google Drive conversion.
 - Copy assistant replies and generated documents.
 - Optional Brave Search integration for web-search-assisted answers.
 - Minimal single-user password login.
@@ -75,6 +76,42 @@ SESSION_SECRET=replace_with_a_long_random_string
 | `ENABLE_WEB_SEARCH` | No | Set to `true` to enable Brave Search support. |
 | `BRAVE_SEARCH_API_KEY` | No | Brave Search API key. Required only when search is enabled. |
 | `WEB_SEARCH_RESULT_COUNT` | No | Number of Brave results to include, from 1 to 5. |
+| `GOOGLE_CLIENT_ID` | No | Google OAuth 2.0 web client ID. Required for Google Docs upload. |
+| `GOOGLE_CLIENT_SECRET` | No | Google OAuth 2.0 web client secret. Required for Google Docs upload. |
+| `GOOGLE_REDIRECT_URI` | No | OAuth callback URL. Defaults to `/api/google/callback` on the current host. |
+| `GOOGLE_TOKEN_FILE` | No | Local file used to store the Google OAuth token. Defaults to `.google-token.json`. |
+
+## Google Docs Upload
+
+Lite Claude UI can upload the active right-side document to Google Docs. It uses the Google Drive API upload endpoint with conversion to the Google Docs MIME type.
+
+Setup:
+
+1. Create or open a Google Cloud project.
+2. Enable the Google Drive API.
+3. Configure an OAuth consent screen.
+4. Create an OAuth 2.0 Client ID with type `Web application`.
+5. Add your callback URL as an authorized redirect URI:
+
+```text
+https://your-domain.example/api/google/callback
+```
+
+For local development:
+
+```text
+http://127.0.0.1:3040/api/google/callback
+```
+
+Then set:
+
+```dotenv
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+GOOGLE_REDIRECT_URI=https://your-domain.example/api/google/callback
+```
+
+The app requests the `https://www.googleapis.com/auth/drive.file` scope. This lets it create and manage files that this app creates or opens, rather than requesting full Drive access.
 
 ## Production Deployment
 

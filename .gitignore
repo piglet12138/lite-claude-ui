@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.google-token.json
 
 node_modules/
 .wrangler/
