@@ -206,6 +206,29 @@ const server = http.createServer(async (req, res) => {
       return json(res, users.map((u) => ({ id: u.id, email: u.email, role: u.role, createdAt: u.createdAt })));
     }
 
+    if (req.method === "POST" && url.pathname === "/api/bug-report") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const body = await readJson(req, 64 * 1024);
+      const text = String(body?.text || "").trim().slice(0, 2000);
+      if (!text) return json(res, { error: "内容不能为空" }, 400);
+      const reportsFile = path.join(root, "bug-reports.json");
+      let reports = [];
+      try { reports = JSON.parse(await fs.readFile(reportsFile, "utf8")); } catch {}
+      reports.push({ id: crypto.randomUUID(), email: session.email, text, userAgent: String(req.headers["user-agent"] || "").slice(0, 200), createdAt: new Date().toISOString() });
+      await fs.writeFile(reportsFile, JSON.stringify(reports, null, 2), "utf8");
+      return json(res, { ok: true });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/bug-reports") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      const reportsFile = path.join(root, "bug-reports.json");
+      let reports = [];
+      try { reports = JSON.parse(await fs.readFile(reportsFile, "utf8")); } catch {}
+      return json(res, reports.reverse());
+    }
+
     if (req.method === "POST" && url.pathname === "/api/import-docx") {
       if (!readSession(req)) return json(res, { error: "Unauthorized" }, 401);
       return importDocx(req, res);

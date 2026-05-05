@@ -104,6 +104,7 @@ function wireEvents() {
   document.querySelector("#switchToRegister")?.addEventListener("click", (e) => { e.preventDefault(); showRegisterForm(); });
   document.querySelector("#switchToLogin")?.addEventListener("click", (e) => { e.preventDefault(); showLoginForm(); });
   els.logout.addEventListener("click", logout);
+  document.querySelector("#bugReportBtn")?.addEventListener("click", showBugReportModal);
   els.newChat.addEventListener("click", () => {
     state.docAutoOpenSuppressedThreadId = "";
     createThread();
@@ -208,6 +209,46 @@ function showLoginForm() {
   document.querySelector("#switchToLogin")?.classList.add("hidden");
   document.querySelector("#authTitle").textContent = "登录 Claude";
   document.querySelector("#authSubtitle").textContent = "继续进入你的文档工作台。";
+}
+
+function showBugReportModal() {
+  document.querySelector(".bug-modal")?.remove();
+  const modal = document.createElement("div");
+  modal.className = "bug-modal";
+  modal.innerHTML = `
+    <div class="bug-modal-backdrop"></div>
+    <div class="bug-modal-card">
+      <h3>反馈问题</h3>
+      <p>描述你遇到的问题或建议：</p>
+      <textarea id="bugText" rows="5" placeholder="比如：上传图片后无法识别内容..."></textarea>
+      <div class="bug-modal-actions">
+        <button class="bug-cancel">取消</button>
+        <button class="bug-submit">提交</button>
+      </div>
+      <div class="bug-msg"></div>
+    </div>`;
+  document.body.append(modal);
+  modal.querySelector(".bug-cancel").addEventListener("click", () => modal.remove());
+  modal.querySelector(".bug-modal-backdrop").addEventListener("click", () => modal.remove());
+  modal.querySelector(".bug-submit").addEventListener("click", async () => {
+    const text = modal.querySelector("#bugText").value.trim();
+    const msg = modal.querySelector(".bug-msg");
+    if (!text) { msg.textContent = "请填写内容"; msg.style.color = "var(--accent)"; return; }
+    modal.querySelector(".bug-submit").disabled = true;
+    modal.querySelector(".bug-submit").textContent = "提交中...";
+    try {
+      const resp = await fetch("/api/bug-report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+      if (!resp.ok) throw new Error((await resp.json()).error || "提交失败");
+      msg.textContent = "感谢反馈！";
+      msg.style.color = "#4d9950";
+      setTimeout(() => modal.remove(), 1200);
+    } catch (e) {
+      msg.textContent = String(e.message);
+      msg.style.color = "var(--accent)";
+      modal.querySelector(".bug-submit").disabled = false;
+      modal.querySelector(".bug-submit").textContent = "提交";
+    }
+  });
 }
 
 async function logout() {

@@ -28,3 +28,4 @@ temp/
 playwright-report/
 test-results/
 users.json
+bug-reports.json

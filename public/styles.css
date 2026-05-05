@@ -582,6 +582,118 @@ img.brand-logo.large {
   text-decoration: underline;
 }
 
+/* Bug report modal */
+.bug-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  animation: ctx-in 0.15s ease-out;
+}
+
+.bug-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.bug-modal-card {
+  position: relative;
+  width: min(420px, calc(100% - 32px));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+
+.bug-modal-card h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.bug-modal-card p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.bug-modal-card textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  padding: 10px 12px;
+  font-size: 13px;
+  resize: vertical;
+  outline: none;
+  line-height: 1.5;
+}
+
+.bug-modal-card textarea:focus {
+  border-color: rgba(192, 90, 50, 0.4);
+}
+
+.bug-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.bug-cancel,
+.bug-submit {
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.bug-cancel {
+  background: transparent;
+  color: var(--muted);
+}
+
+.bug-cancel:hover {
+  background: rgba(128, 128, 128, 0.08);
+}
+
+.bug-submit {
+  background: var(--accent);
+  color: #fff;
+}
+
+[data-theme="dark"] .bug-submit {
+  color: #1a1512;
+}
+
+.bug-submit:hover {
+  background: var(--accent-dark);
+}
+
+.bug-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.bug-msg {
+  margin-top: 8px;
+  font-size: 12px;
+  min-height: 16px;
+}
+
+#bugReportBtn {
+  font-size: 13px;
+  width: auto;
+  padding: 0 8px;
+}
+
 [data-theme="dark"] .form-error {
   color: #e06050;
 }
