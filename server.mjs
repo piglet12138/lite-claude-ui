@@ -102,6 +102,41 @@ if (!apiKey) {
   throw new Error("LUCKY_API_KEY is required");
 }
 
+// ---------------------------------------------------------------------------
+// User management (JSON file based)
+// ---------------------------------------------------------------------------
+const usersFile = path.join(root, "users.json");
+const sessions = new Map(); // token -> { userId, email, role, exp }
+const loginAttempts = new Map(); // ip -> { count, resetAt }
+
+async function loadUsers() {
+  try { return JSON.parse(await fs.readFile(usersFile, "utf8")); } catch { return []; }
+}
+
+async function saveUsers(users) {
+  await fs.writeFile(usersFile, JSON.stringify(users, null, 2), "utf8");
+}
+
+function hashPwd(password, salt) {
+  return crypto.createHash("sha256").update(password + salt).digest("hex");
+}
+
+async function seedAdmin() {
+  const users = await loadUsers();
+  if (users.length) return;
+  const salt = crypto.randomBytes(16).toString("hex");
+  users.push({
+    id: crypto.randomUUID(),
+    email: accessEmail,
+    passwordHash: hashPwd(accessPassword, salt),
+    salt,
+    role: "admin",
+    createdAt: new Date().toISOString(),
+  });
+  await saveUsers(users);
+}
+seedAdmin();
+
 const mime = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -117,22 +152,58 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
 
     if (req.method === "GET" && url.pathname === "/api/session") {
-      return json(res, { authenticated: Boolean(readSession(req)), email: accessEmail, model });
+      const session = readSession(req);
+      return json(res, { authenticated: Boolean(session), email: session?.email || "", role: session?.role || "", model });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/register") {
+      const ip = req.socket.remoteAddress || "";
+      if (isRateLimited(ip)) return json(res, { error: "操作过于频繁，请稍后再试" }, 429);
+      const body = await readJson(req, 32 * 1024);
+      const email = String(body?.email || "").trim().toLowerCase();
+      const password = String(body?.password || "");
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, { error: "邮箱格式不正确" }, 400);
+      if (password.length < 6) return json(res, { error: "密码至少 6 位" }, 400);
+      const users = await loadUsers();
+      if (users.find((u) => u.email === email)) return json(res, { error: "该邮箱已注册" }, 409);
+      const salt = crypto.randomBytes(16).toString("hex");
+      const user = { id: crypto.randomUUID(), email, passwordHash: hashPwd(password, salt), salt, role: "user", createdAt: new Date().toISOString() };
+      users.push(user);
+      await saveUsers(users);
+      const token = createSession(user);
+      res.setHeader("Set-Cookie", `claude_lite=${token}; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=604800`);
+      return json(res, { ok: true, email: user.email });
     }
 
     if (req.method === "POST" && url.pathname === "/api/login") {
+      const ip = req.socket.remoteAddress || "";
+      if (isRateLimited(ip)) return json(res, { error: "操作过于频繁，请稍后再试" }, 429);
       const body = await readJson(req, 32 * 1024);
-      if (body?.email === accessEmail && body?.password === accessPassword) {
-        const token = signSession(body.email);
-        res.setHeader("Set-Cookie", `claude_lite=${token}; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=604800`);
-        return json(res, { ok: true, email: body.email });
+      const email = String(body?.email || "").trim().toLowerCase();
+      const password = String(body?.password || "");
+      const users = await loadUsers();
+      const user = users.find((u) => u.email === email);
+      if (!user || hashPwd(password, user.salt) !== user.passwordHash) {
+        recordAttempt(ip);
+        return json(res, { error: "账号或密码不正确" }, 401);
       }
-      return json(res, { error: "Invalid email or password" }, 401);
+      const token = createSession(user);
+      res.setHeader("Set-Cookie", `claude_lite=${token}; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=604800`);
+      return json(res, { ok: true, email: user.email });
     }
 
     if (req.method === "POST" && url.pathname === "/api/logout") {
+      const session = readSession(req);
+      if (session) sessions.delete(getCookieToken(req));
       res.setHeader("Set-Cookie", "claude_lite=; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=0");
       return json(res, { ok: true });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/users") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      const users = await loadUsers();
+      return json(res, users.map((u) => ({ id: u.id, email: u.email, role: u.role, createdAt: u.createdAt })));
     }
 
     if (req.method === "POST" && url.pathname === "/api/import-docx") {
@@ -897,32 +968,45 @@ async function staticFile(requestPath, res) {
   }
 }
 
-function signSession(email) {
-  const payload = Buffer.from(JSON.stringify({ email, exp: Date.now() + 7 * 86400_000 })).toString("base64url");
-  const sig = crypto.createHmac("sha256", sessionSecret).update(payload).digest("base64url");
-  return `${payload}.${sig}`;
+function createSession(user) {
+  const token = crypto.randomBytes(32).toString("hex");
+  sessions.set(token, { userId: user.id, email: user.email, role: user.role, exp: Date.now() + 7 * 86400_000 });
+  return token;
+}
+
+function getCookieToken(req) {
+  const cookie = req.headers.cookie || "";
+  return cookie.split(";").map((p) => p.trim()).find((p) => p.startsWith("claude_lite="))?.slice("claude_lite=".length) || "";
 }
 
 function readSession(req) {
-  const cookie = req.headers.cookie || "";
-  const token = cookie
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith("claude_lite="))
-    ?.slice("claude_lite=".length);
+  const token = getCookieToken(req);
   if (!token) return null;
-  const [payload, sig] = token.split(".");
-  if (!payload || !sig) return null;
-  const expected = crypto.createHmac("sha256", sessionSecret).update(payload).digest("base64url");
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
-  try {
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (data.exp < Date.now() || data.email !== accessEmail) return null;
-    return data;
-  } catch {
-    return null;
-  }
+  const session = sessions.get(token);
+  if (!session) return null;
+  if (session.exp < Date.now()) { sessions.delete(token); return null; }
+  return session;
 }
+
+function isRateLimited(ip) {
+  const record = loginAttempts.get(ip);
+  if (!record || record.resetAt < Date.now()) return false;
+  return record.count >= 10;
+}
+
+function recordAttempt(ip) {
+  const record = loginAttempts.get(ip) || { count: 0, resetAt: Date.now() + 60_000 };
+  if (record.resetAt < Date.now()) { record.count = 0; record.resetAt = Date.now() + 60_000; }
+  record.count++;
+  loginAttempts.set(ip, record);
+}
+
+// Cleanup expired sessions every hour
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of sessions) { if (session.exp < now) sessions.delete(token); }
+  for (const [ip, record] of loginAttempts) { if (record.resetAt < now) loginAttempts.delete(ip); }
+}, 3600_000);
 
 async function readJson(req, maxBytes) {
   const buffer = await readBuffer(req, maxBytes);

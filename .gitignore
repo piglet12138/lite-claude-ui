@@ -27,3 +27,4 @@ temp/
 
 playwright-report/
 test-results/
+users.json

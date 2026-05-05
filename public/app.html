@@ -45,20 +45,40 @@
         <section id="loginView" class="login-view hidden" aria-label="登录">
           <div class="login-card">
             <img class="brand-logo large" src="/logo.svg" alt="" width="42" height="42" />
-            <h1>登录 Claude</h1>
-            <p>继续进入你的文档工作台。</p>
+            <h1 id="authTitle">登录 Claude</h1>
+            <p id="authSubtitle">继续进入你的文档工作台。</p>
             <form id="loginForm" class="login-form">
               <label>
-                账号
-                <input name="email" autocomplete="username" required />
+                邮箱
+                <input name="email" type="email" autocomplete="username" required />
               </label>
               <label>
                 密码
                 <input name="password" type="password" autocomplete="current-password" required />
               </label>
-              <button class="submit-button" type="submit">继续</button>
+              <button class="submit-button" type="submit">登录</button>
               <div id="loginError" class="form-error" role="alert"></div>
             </form>
+            <form id="registerForm" class="login-form hidden">
+              <label>
+                邮箱
+                <input name="email" type="email" autocomplete="username" required />
+              </label>
+              <label>
+                密码
+                <input name="password" type="password" autocomplete="new-password" required minlength="6" />
+              </label>
+              <label>
+                确认密码
+                <input name="confirmPassword" type="password" autocomplete="new-password" required minlength="6" />
+              </label>
+              <button class="submit-button" type="submit">注册</button>
+              <div id="registerError" class="form-error" role="alert"></div>
+            </form>
+            <p class="auth-switch">
+              <span id="switchToRegister">没有账号？<a href="#">免费注册</a></span>
+              <span id="switchToLogin" class="hidden">已有账号？<a href="#">返回登录</a></span>
+            </p>
           </div>
         </section>
 

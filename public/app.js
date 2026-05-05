@@ -100,6 +100,9 @@ function toggleTheme() {
 
 function wireEvents() {
   els.loginForm.addEventListener("submit", login);
+  document.querySelector("#registerForm")?.addEventListener("submit", register);
+  document.querySelector("#switchToRegister")?.addEventListener("click", (e) => { e.preventDefault(); showRegisterForm(); });
+  document.querySelector("#switchToLogin")?.addEventListener("click", (e) => { e.preventDefault(); showLoginForm(); });
   els.logout.addEventListener("click", logout);
   els.newChat.addEventListener("click", () => {
     state.docAutoOpenSuppressedThreadId = "";
@@ -166,6 +169,45 @@ async function login(event) {
   }
   state.authenticated = true;
   showChat();
+}
+
+async function register(event) {
+  event.preventDefault();
+  const errorEl = document.querySelector("#registerError");
+  errorEl.textContent = "";
+  const form = new FormData(event.target);
+  const email = form.get("email");
+  const password = form.get("password");
+  const confirmPassword = form.get("confirmPassword");
+  if (password !== confirmPassword) { errorEl.textContent = "两次密码不一致"; return; }
+  if (password.length < 6) { errorEl.textContent = "密码至少 6 位"; return; }
+  const response = await fetch("/api/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) { errorEl.textContent = data.error || "注册失败"; return; }
+  state.authenticated = true;
+  showChat();
+}
+
+function showRegisterForm() {
+  els.loginForm.classList.add("hidden");
+  document.querySelector("#registerForm")?.classList.remove("hidden");
+  document.querySelector("#switchToRegister")?.classList.add("hidden");
+  document.querySelector("#switchToLogin")?.classList.remove("hidden");
+  document.querySelector("#authTitle").textContent = "注册 Claude";
+  document.querySelector("#authSubtitle").textContent = "创建账号，免费使用。";
+}
+
+function showLoginForm() {
+  els.loginForm.classList.remove("hidden");
+  document.querySelector("#registerForm")?.classList.add("hidden");
+  document.querySelector("#switchToRegister")?.classList.remove("hidden");
+  document.querySelector("#switchToLogin")?.classList.add("hidden");
+  document.querySelector("#authTitle").textContent = "登录 Claude";
+  document.querySelector("#authSubtitle").textContent = "继续进入你的文档工作台。";
 }
 
 async function logout() {
