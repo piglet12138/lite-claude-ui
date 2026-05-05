@@ -466,6 +466,69 @@ img.brand-logo.large {
   max-width: 740px;
 }
 
+/* Tool call cards */
+.tool-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 740px;
+  margin-bottom: 10px;
+}
+
+.tool-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 13px;
+  background: linear-gradient(135deg, #f8f1e8, #f3ece2);
+  font-size: 13px;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.tool-card.completed {
+  background: linear-gradient(135deg, #f0ebe2, #ebe5da);
+  border-color: #d4c8b6;
+}
+
+.tool-card-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.tool-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.tool-label {
+  color: var(--ink);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid #c4a882;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: tool-spin 0.75s linear infinite;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+@keyframes tool-spin {
+  to { transform: rotate(360deg); }
+}
+
+.tool-card-result {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
 .message-text {
   white-space: pre-wrap;
 }

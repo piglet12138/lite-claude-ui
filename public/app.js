@@ -238,9 +238,20 @@ function renderMessages() {
     const bubble = document.createElement("div");
     bubble.className = `message-bubble${isStreamingMessage ? " streaming" : ""}`;
     if (message.role === "assistant") {
+      // Render tool call cards before the text content
+      if (message.toolCalls?.length) {
+        const toolsDiv = document.createElement("div");
+        toolsDiv.className = "tool-calls";
+        for (const tc of message.toolCalls) {
+          toolsDiv.append(renderToolCard(tc));
+        }
+        body.append(toolsDiv);
+      }
       const content = displayAssistantMessage(message.content);
-      bubble.innerHTML = renderRichDocument(content, "chat");
-      body.append(bubble);
+      if (content.trim()) {
+        bubble.innerHTML = renderRichDocument(content, "chat");
+        body.append(bubble);
+      }
       body.append(renderMessageActions(message, isStreamingMessage));
       wrapper.append(body);
     } else {
@@ -291,6 +302,35 @@ function renderMessageActions(message, isStreamingMessage) {
   return actions;
 }
 
+function renderToolCard(tc) {
+  const card = document.createElement("div");
+  card.className = `tool-card ${tc.status || "running"}`;
+
+  const iconText = tc.name === "web_search" ? "🔍" : tc.name === "create_artifact" ? "📄" : "🔧";
+  let label = tc.name;
+  if (tc.name === "web_search") label = `搜索「${tc.args?.query || "..."}」`;
+  else if (tc.name === "create_artifact") label = `创建「${tc.args?.title || "Artifact"}」`;
+
+  const header = document.createElement("div");
+  header.className = "tool-card-header";
+  header.innerHTML = `<span class="tool-icon">${iconText}</span><span class="tool-label">${escapeHtml(label)}</span>`;
+  if (tc.status === "running") {
+    const spinner = document.createElement("span");
+    spinner.className = "tool-spinner";
+    header.append(spinner);
+  }
+  card.append(header);
+
+  if (tc.summary) {
+    const result = document.createElement("div");
+    result.className = "tool-card-result";
+    result.textContent = tc.summary;
+    card.append(result);
+  }
+
+  return card;
+}
+
 function renderAttachments() {
   els.attachmentBar.innerHTML = "";
   for (const attachment of state.attachments) {
@@ -328,11 +368,6 @@ function queueStreamRender(thread, assistant) {
   requestAnimationFrame(() => {
     streamRenderQueued = false;
     renderMessages();
-    if (state.expectDocument || looksLikeDocument(assistant.content)) {
-      upsertArtifactFromAssistant(assistant.content, thread);
-      renderDocuments();
-      renderDocumentPanel();
-    }
   });
 }
 
@@ -390,12 +425,11 @@ async function send(event) {
   const attachmentText = attachments.filter((file) => file.kind !== "image").map(attachmentTextForMessage).join("");
   const userContent = `${text}${attachmentText}`.trim();
   const apiContent = buildUserApiContent(text, attachments);
-  const useWebSearch = state.webSearchEnabled || shouldUseWebSearch(userContent);
-  state.expectDocument = shouldCreateDocument(userContent) || attachments.some((item) => item.kind === "document");
+  state.expectDocument = false; // Artifact creation is now driven by tool use only
 
   thread.messages.push({ role: "user", content: userContent, attachments: displayAttachments });
   thread.title = titleFrom(userContent || displayAttachments[0]?.name || "图片");
-  thread.messages.push({ role: "assistant", content: "" });
+  thread.messages.push({ role: "assistant", content: "", toolCalls: [] });
   state.attachments = [];
   els.prompt.value = "";
   autosize();
@@ -408,7 +442,7 @@ async function send(event) {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ messages: messagesForApi(thread, apiContent), webSearch: useWebSearch }),
+      body: JSON.stringify({ messages: messagesForApi(thread, apiContent) }),
     });
     if (!response.ok || !response.body) throw new Error(await response.text());
 
@@ -421,26 +455,70 @@ async function send(event) {
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split(/\r?\n\r?\n/);
-      buffer = events.pop() || "";
-      for (const eventText of events) {
-        if (eventText.startsWith(":")) continue;
-        const line = eventText.split(/\n/).find((item) => item.startsWith("data:"));
-        if (!line) continue;
-        let data;
-        try {
-          data = JSON.parse(line.slice(5));
-        } catch {
-          continue;
+      const sseBlocks = buffer.split(/\r?\n\r?\n/);
+      buffer = sseBlocks.pop() || "";
+      for (const block of sseBlocks) {
+        if (block.startsWith(":")) continue;
+        const lines = block.split(/\r?\n/);
+        let eventType = "";
+        let dataStr = "";
+        for (const l of lines) {
+          if (l.startsWith("event:")) eventType = l.slice(6).trim();
+          else if (l.startsWith("data:")) dataStr = l.slice(5).trim();
         }
-        if (data.delta) {
-          assistant.content += data.delta;
-          queueStreamRender(thread, assistant);
+        if (!dataStr) continue;
+
+        let data;
+        try { data = JSON.parse(dataStr); } catch { continue; }
+
+        switch (eventType) {
+          case "tool_start":
+            assistant.toolCalls = assistant.toolCalls || [];
+            assistant.toolCalls.push({
+              id: data.id,
+              name: data.name,
+              args: data.args || {},
+              summary: "",
+              status: "running",
+            });
+            queueStreamRender(thread, assistant);
+            break;
+
+          case "tool_result":
+            if (assistant.toolCalls) {
+              const tc = assistant.toolCalls.find((t) => t.id === data.id);
+              if (tc) {
+                tc.summary = data.summary || "";
+                tc.status = "completed";
+              }
+            }
+            queueStreamRender(thread, assistant);
+            break;
+
+          case "artifact":
+            upsertArtifactFromTool(data, thread);
+            renderDocuments();
+            renderDocumentPanel();
+            break;
+
+          case "done":
+            break;
+
+          default:
+            // Regular data event (content delta)
+            if (data.delta) {
+              assistant.content += data.delta;
+              queueStreamRender(thread, assistant);
+            }
+            break;
         }
       }
     }
-    if (state.expectDocument || looksLikeDocument(assistant.content) || looksLikeRunnableArtifact(assistant.content)) {
-      upsertArtifactFromAssistant(assistant.content, thread);
+    // Only detect inline HTML artifacts as fallback (e.g. model outputs raw HTML without tool)
+    if (!assistant.toolCalls?.some((t) => t.name === "create_artifact")) {
+      if (looksLikeRunnableArtifact(assistant.content)) {
+        upsertArtifactFromAssistant(assistant.content, thread);
+      }
     }
   } catch (error) {
     thread.messages.at(-1).content ||= `请求失败：${String(error.message || error).slice(0, 500)}`;
@@ -452,6 +530,31 @@ async function send(event) {
     saveDocuments();
     render();
   }
+}
+
+function upsertArtifactFromTool(data, thread) {
+  const existing = state.documents.find((doc) => doc.threadId === thread.id);
+  const artifactType = data.type || "html";
+  const payload = {
+    id: existing?.id || crypto.randomUUID(),
+    threadId: thread.id,
+    title: data.title || "Artifact",
+    content: data.content || "",
+    type: artifactType,
+    language: data.language || (artifactType === "html" ? "html" : "markdown"),
+    source: data.description || "Claude 生成",
+    filePath: data.file_path || (artifactType === "html" ? "index.html" : artifactType === "code" ? "code.js" : "document.md"),
+    template: artifactType === "html" ? "html-inline" : artifactType,
+    view: artifactType === "code" ? "source" : "preview",
+    updatedAt: Date.now(),
+  };
+  if (existing) Object.assign(existing, payload);
+  else state.documents.unshift(payload);
+  state.activeDocId = payload.id;
+  if (state.docAutoOpenSuppressedThreadId !== thread.id) {
+    state.docOpen = true;
+  }
+  saveDocuments();
 }
 
 function upsertArtifactFromAssistant(content, thread) {

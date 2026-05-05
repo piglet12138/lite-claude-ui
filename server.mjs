@@ -17,20 +17,61 @@ const sessionSecret = process.env.SESSION_SECRET || env.SESSION_SECRET || crypto
 const braveApiKey = process.env.BRAVE_SEARCH_API_KEY || env.BRAVE_SEARCH_API_KEY;
 const webSearchEnabled = /^(true|1|yes)$/i.test(process.env.ENABLE_WEB_SEARCH || env.ENABLE_WEB_SEARCH || "false");
 const webSearchCount = Math.max(1, Math.min(5, Number(process.env.WEB_SEARCH_RESULT_COUNT || env.WEB_SEARCH_RESULT_COUNT || 3)));
+const webSearchQueryCount = Math.max(1, Math.min(3, Number(process.env.WEB_SEARCH_QUERY_COUNT || env.WEB_SEARCH_QUERY_COUNT || 2)));
 const googleClientId = process.env.GOOGLE_CLIENT_ID || env.GOOGLE_CLIENT_ID;
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET || env.GOOGLE_CLIENT_SECRET;
 const googleRedirectUri = process.env.GOOGLE_REDIRECT_URI || env.GOOGLE_REDIRECT_URI;
 const googleTokenFile = path.resolve(root, process.env.GOOGLE_TOKEN_FILE || env.GOOGLE_TOKEN_FILE || ".google-token.json");
 const googleScopes = ["https://www.googleapis.com/auth/drive.file"];
 const googleOauthStates = new Map();
-const systemPrompt =
-  [
-    "默认用中文，直接完成用户请求，不做身份纠正、模型声明或元说明。",
-    "文档要适合复制到 Google Docs：标题、层级、段落、表格和行动项清楚。",
-    "需要可预览作品时生成单个 Artifact：先一句说明，再给 artifact 元信息注释和一个代码块。",
-    '元信息注释：<!-- artifact: {"template":"html-inline","title":"短标题","description":"一句话描述","file_path":"index.html","port":null} -->',
-    "默认用完整自包含 HTML；不要依赖构建步骤。不要输出工具调用标签。",
-  ].join("\n");
+const agenticSystemPrompt = [
+  "你是一个极其聪明、有深度的 AI 助手。默认用中文。不做身份声明。",
+  "回答风格：深度优先，充分展开，结构清晰，不用空洞收尾语。",
+  "",
+  "工具使用规则：",
+  "- web_search：需要最新信息或事实验证时搜索。可多次搜索。",
+  "- create_artifact：创建文档/网页/代码等完整作品，显示在右侧面板。",
+  "",
+  "create_artifact 行为模式（严格遵守）：",
+  "1. 聊天中只用 1-2 句话说明意图",
+  "2. 调用 create_artifact 生成完整内容（文档至少2000字，HTML要美观完整，代码要可运行）",
+  "3. 之后用 1 句话收尾",
+  "4. 绝不在聊天正文中写出文档全文内容",
+  "",
+  "必须用 create_artifact 的场景：写文档/报告/白皮书/方案/邮件、做网页/应用/可视化、写代码文件。",
+  "不用的场景：普通问答、短回复、简单列表。",
+].join("\n");
+
+const anthropicTools = [
+  {
+    name: "web_search",
+    description: "Search the web using Brave Search for current/recent information, facts, prices, news, weather, or anything that benefits from real-time data. Can be called multiple times with different queries.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The search query, concise and specific" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "create_artifact",
+    description: "Create or update a rich document or interactive artifact displayed in the user's side panel. Use for: long-form documents, reports, HTML pages, interactive web apps, data visualizations, SVG graphics, code files. Do NOT use for short answers that fit in a chat message.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Short title, max 50 chars" },
+        type: { type: "string", enum: ["html", "document", "code"], description: "html: self-contained HTML/CSS/JS page or app. document: Markdown text. code: source code file." },
+        content: { type: "string", description: "Full content of the artifact" },
+        language: { type: "string", description: "e.g. html, markdown, javascript, python" },
+        description: { type: "string", description: "One-line description of the artifact" },
+        file_path: { type: "string", description: "Suggested filename, e.g. index.html, report.md" },
+      },
+      required: ["title", "type", "content"],
+    },
+  },
+];
+const apiEndpoint = `${baseUrl.replace(/\/v1\/?$/, "")}/v1/messages`;
 
 if (!apiKey) {
   throw new Error("LUCKY_API_KEY is required");
@@ -264,50 +305,17 @@ async function chat(req, res) {
   const body = await readJson(req, 8 * 1024 * 1024);
   const messages = Array.isArray(body?.messages) ? body.messages.slice(-24) : [];
   const temperature = Number.isFinite(body?.temperature) ? body.temperature : 0.42;
-  const latestText = latestUserText(messages);
-  const searchResults = body?.webSearch && webSearchEnabled && braveApiKey ? await braveSearch(latestText) : [];
-  const searchContext = formatSearchContext(searchResults);
-  const preparedMessages = searchContext ? attachSearchContext(messages, searchContext) : messages;
-  const normalizedMessages = preparedMessages.map((message) => ({
-      role: message.role === "assistant" ? "assistant" : "user",
-      content: normalizeMessageContent(message.content),
-    }));
-  const hasImage = normalizedMessages.some(
-    (message) => Array.isArray(message.content) && message.content.some((part) => part.type === "image" || part.type === "image_url"),
-  );
-  const requestMessages = hasImage ? normalizedMessages : [{ role: "system", content: systemPrompt }, ...normalizedMessages];
 
-  const upstreamBody = {
-    model,
-    stream: !hasImage,
-    temperature,
-    messages: requestMessages,
-  };
-  let upstream = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(upstreamBody),
+  // Convert frontend messages to Anthropic format
+  const apiMessages = toAnthropicMessages(messages);
+
+  // Build available tools
+  const tools = anthropicTools.filter((t) => {
+    if (t.name === "web_search") return webSearchEnabled && braveApiKey;
+    return true;
   });
 
-  if (!upstream.ok && hasImage) {
-    upstream = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({ model, stream: false, messages: requestMessages }),
-    });
-  }
-
-  if (!upstream.ok || !upstream.body) {
-    const text = await upstream.text().catch(() => "");
-    return json(res, { error: `LuckyAPI error ${upstream.status}`, detail: text.slice(0, 800) }, 502);
-  }
-
+  // Start SSE response to frontend
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-cache, no-transform",
@@ -318,22 +326,190 @@ async function chat(req, res) {
   res.flushHeaders?.();
   res.write(": stream\n\n");
 
-  if (hasImage) {
-    const data = await upstream.json();
-    const text = data.choices?.[0]?.message?.content || "";
-    for (const chunk of chunkText(text)) {
-      res.write(`data: ${JSON.stringify({ delta: chunk })}\n\n`);
-      res.flush?.();
-      await delay(22);
+  const MAX_ROUNDS = 5;
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const isLastRound = round === MAX_ROUNDS - 1;
+    // After first round, only allow create_artifact (no more searching to prevent context bloat)
+    const roundTools = round === 0 ? tools : tools.filter((t) => t.name !== "web_search");
+
+    const upstreamBody = {
+      model,
+      max_tokens: 16384,
+      stream: true,
+      temperature,
+      system: agenticSystemPrompt,
+      messages: apiMessages,
+      ...(!isLastRound && roundTools.length ? { tools: roundTools } : {}),
+    };
+
+    const upstream = await fetch(apiEndpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(upstreamBody),
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      const errText = await upstream.text().catch(() => "");
+      // On 400, wait briefly then retry (handles both rate limits and context size)
+      if (upstream.status === 400) {
+        await delay(1500);
+        const compressedMessages = round === 0 ? apiMessages : compressMessages(apiMessages);
+        const retryBody = {
+          model, max_tokens: 16384, stream: true, temperature,
+          system: agenticSystemPrompt,
+          messages: compressedMessages,
+          tools: tools.length ? tools : undefined,
+        };
+        const retry = await fetch(apiEndpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+          body: JSON.stringify(retryBody),
+        });
+        if (retry.ok && retry.body) {
+          const retryResult = await consumeAnthropicStream(retry.body, res);
+          // Handle tool calls from retry (mainly create_artifact)
+          if (retryResult.stopReason === "tool_use" && retryResult.toolUseBlocks.length) {
+            for (const tc of retryResult.toolUseBlocks) {
+              res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
+              const toolResult = await executeTool(tc.name, tc.input);
+              if (tc.name === "create_artifact") {
+                res.write(`event: artifact\ndata: ${JSON.stringify({ title: tc.input.title || "Artifact", type: tc.input.type || "html", content: tc.input.content || "", language: tc.input.language || "", description: tc.input.description || "", file_path: tc.input.file_path || "" })}\n\n`);
+              }
+              res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary })}\n\n`);
+              res.flush?.();
+            }
+          }
+          break;
+        }
+      }
+      res.write(`data: ${JSON.stringify({ delta: `请求失败 (${upstream.status})：${errText.slice(0, 200)}` })}\n\n`);
+      break;
     }
-    res.write("event: done\ndata: {}\n\n");
-    res.end();
-    return;
+
+    const result = await consumeAnthropicStream(upstream.body, res);
+
+    if (result.stopReason === "tool_use" && result.toolUseBlocks.length) {
+      const allSearches = result.toolUseBlocks.every((t) => t.name === "web_search");
+      // Only add verbose assistant tool_use blocks for non-search-only rounds
+      if (!allSearches) {
+        apiMessages.push({ role: "assistant", content: result.allBlocks });
+      }
+
+      // Execute tools and build tool_result blocks
+      const toolResultBlocks = [];
+      let hasArtifact = false;
+      for (const tc of result.toolUseBlocks) {
+        res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
+        res.flush?.();
+
+        const toolResult = await executeTool(tc.name, tc.input);
+
+        if (tc.name === "create_artifact") {
+          hasArtifact = true;
+          res.write(`event: artifact\ndata: ${JSON.stringify({
+            title: tc.input.title || "Artifact",
+            type: tc.input.type || "html",
+            content: tc.input.content || "",
+            language: tc.input.language || "",
+            description: tc.input.description || "",
+            file_path: tc.input.file_path || "",
+          })}\n\n`);
+          res.flush?.();
+        }
+
+        res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary })}\n\n`);
+        res.flush?.();
+
+        toolResultBlocks.push({
+          type: "tool_result",
+          tool_use_id: tc.id,
+          content: toolResult.content,
+        });
+      }
+
+      // If artifact was created, stop the loop — don't carry the massive content into next round
+      if (hasArtifact) break;
+
+      // Compact approach: instead of standard tool_use/tool_result format (verbose),
+      // flatten search results into a lean text exchange to avoid context bloat.
+      if (allSearches && toolResultBlocks.length) {
+        const searchSummary = toolResultBlocks
+          .map((b) => String(b.content || "").slice(0, 600))
+          .filter(Boolean)
+          .join("\n\n");
+        // Replace verbose tool format with compact text
+        apiMessages.push({ role: "assistant", content: `我搜索了相关信息，以下是搜索结果：\n\n${searchSummary}` });
+        apiMessages.push({ role: "user", content: "好的，请基于这些信息完成我的请求。如果需要创建文档，请使用 create_artifact 工具。" });
+      } else {
+        apiMessages.push({ role: "user", content: toolResultBlocks });
+      }
+      continue; // Next round
+    }
+
+    // No tool calls: final answer was already streamed
+    break;
   }
 
-  const reader = upstream.body.getReader();
+  res.write("event: done\ndata: {}\n\n");
+  res.end();
+}
+
+// ---------------------------------------------------------------------------
+// Convert frontend messages (OpenAI-ish) to Anthropic Messages API format
+// ---------------------------------------------------------------------------
+function toAnthropicMessages(messages) {
+  const result = [];
+  for (const msg of messages) {
+    const role = msg.role === "assistant" ? "assistant" : "user";
+    const content = toAnthropicContent(msg.content, role);
+    // Anthropic requires alternating user/assistant — merge consecutive same-role
+    if (result.length && result.at(-1).role === role) {
+      const prev = result.at(-1);
+      prev.content = Array.isArray(prev.content)
+        ? [...prev.content, ...(Array.isArray(content) ? content : [{ type: "text", text: content }])]
+        : [{ type: "text", text: prev.content }, ...(Array.isArray(content) ? content : [{ type: "text", text: content }])];
+    } else {
+      result.push({ role, content });
+    }
+  }
+  return result;
+}
+
+function toAnthropicContent(content, role) {
+  if (!Array.isArray(content)) return String(content || "").slice(0, 120000);
+  const blocks = [];
+  for (const part of content) {
+    if (part?.type === "image_url") {
+      const url = part.image_url?.url || (typeof part.image_url === "string" ? part.image_url : "");
+      const parsed = parseDataImage(url);
+      if (parsed) {
+        blocks.push({ type: "image", source: parsed });
+      }
+    } else {
+      const text = String(part?.text || "").slice(0, 120000);
+      if (text) blocks.push({ type: "text", text });
+    }
+  }
+  return blocks.length === 1 && blocks[0].type === "text" ? blocks[0].text : blocks;
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic streaming parser — forwards text deltas to client, accumulates
+// tool_use blocks, returns everything when the stream ends.
+// ---------------------------------------------------------------------------
+async function consumeAnthropicStream(body, res) {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let textContent = "";
+  const allBlocks = [];     // complete content blocks for context
+  let currentBlock = null;
+  let stopReason = "";
 
   while (true) {
     const { value, done } = await reader.read();
@@ -342,30 +518,151 @@ async function chat(req, res) {
     const lines = buffer.split(/\r?\n/);
     buffer = lines.pop() || "";
 
+    let eventType = "";
     for (const line of lines) {
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (!data) continue;
-      if (data === "[DONE]") {
-        res.write("event: done\ndata: {}\n\n");
-        res.end();
-        return;
+      if (line.startsWith("event:")) {
+        eventType = line.slice(6).trim();
+        continue;
       }
+      if (!line.startsWith("data:")) continue;
+      const raw = line.slice(5).trim();
+      if (!raw) continue;
+
       try {
-        const parsed = JSON.parse(data);
-        const delta = parsed.choices?.[0]?.delta?.content || parsed.choices?.[0]?.message?.content || "";
-        if (delta) {
-          res.write(`data: ${JSON.stringify({ delta })}\n\n`);
-          res.flush?.();
+        const data = JSON.parse(raw);
+
+        switch (eventType) {
+          case "content_block_start":
+            currentBlock = { ...data.content_block };
+            if (currentBlock.type === "tool_use") {
+              currentBlock._inputJson = "";
+            }
+            break;
+
+          case "content_block_delta":
+            if (data.delta?.type === "text_delta" && data.delta.text) {
+              textContent += data.delta.text;
+              if (currentBlock) currentBlock.text = (currentBlock.text || "") + data.delta.text;
+              res.write(`data: ${JSON.stringify({ delta: data.delta.text })}\n\n`);
+              res.flush?.();
+            }
+            if (data.delta?.type === "input_json_delta" && data.delta.partial_json != null) {
+              if (currentBlock) currentBlock._inputJson = (currentBlock._inputJson || "") + data.delta.partial_json;
+            }
+            break;
+
+          case "content_block_stop":
+            if (currentBlock) {
+              if (currentBlock.type === "tool_use") {
+                currentBlock.input = safeParseJson(currentBlock._inputJson);
+                delete currentBlock._inputJson;
+              }
+              allBlocks.push(currentBlock);
+              currentBlock = null;
+            }
+            break;
+
+          case "message_delta":
+            if (data.delta?.stop_reason) stopReason = data.delta.stop_reason;
+            break;
         }
       } catch {
-        // Ignore malformed upstream fragments.
+        // Ignore malformed
       }
     }
   }
 
-  res.write("event: done\ndata: {}\n\n");
-  res.end();
+  return {
+    textContent,
+    allBlocks: allBlocks.map((b) => {
+      if (b.type === "text") return { type: "text", text: b.text || "" };
+      if (b.type === "tool_use") return { type: "tool_use", id: b.id, name: b.name, input: b.input };
+      return b;
+    }),
+    toolUseBlocks: allBlocks.filter((b) => b.type === "tool_use"),
+    stopReason,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool execution dispatcher
+// ---------------------------------------------------------------------------
+async function executeTool(name, args) {
+  switch (name) {
+    case "web_search": {
+      const query = String(args?.query || "").trim();
+      if (!query) return { summary: "空查询", content: "No query provided." };
+      const results = await braveSearch(query);
+      if (!results.length) return { summary: "无结果", content: `No search results found for: ${query}` };
+      const formatted = results
+        .map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.description.slice(0, 300)}`)
+        .join("\n\n");
+      return { summary: `${results.length} 条结果`, content: formatted.slice(0, 1500) };
+    }
+    case "create_artifact": {
+      const title = String(args?.title || "Artifact").slice(0, 50);
+      return {
+        summary: `已创建「${title}」`,
+        content: `Artifact "${title}" has been created and is now visible in the user's preview panel.`,
+      };
+    }
+    default:
+      return { summary: "未知工具", content: `Unknown tool: ${name}` };
+  }
+}
+
+// Compress messages for retry after 400 — flatten tool exchanges into a single user summary
+function compressMessages(messages) {
+  const compressed = [];
+  let toolSummary = "";
+
+  for (const msg of messages) {
+    if (msg.role === "assistant" && Array.isArray(msg.content)) {
+      // Extract text parts, summarize tool_use parts
+      const textParts = msg.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+      const toolParts = msg.content.filter((b) => b.type === "tool_use").map((b) => `[已调用 ${b.name}]`).join(" ");
+      if (textParts || toolParts) {
+        toolSummary += (textParts ? textParts + " " : "") + toolParts + "\n";
+      }
+    } else if (msg.role === "user" && Array.isArray(msg.content) && msg.content.some((b) => b.type === "tool_result")) {
+      // Summarize tool results
+      for (const block of msg.content) {
+        if (block.type === "tool_result") {
+          const content = String(block.content || "").slice(0, 400);
+          toolSummary += `[工具结果]: ${content}\n`;
+        }
+      }
+    } else {
+      // Regular message — if we have accumulated tool summary, inject it first
+      if (toolSummary) {
+        compressed.push({ role: "assistant", content: toolSummary.trim() });
+        toolSummary = "";
+      }
+      compressed.push(msg);
+    }
+  }
+
+  // If trailing tool summary, add as assistant message + clear instruction
+  if (toolSummary) {
+    compressed.push({ role: "assistant", content: toolSummary.trim() });
+    compressed.push({ role: "user", content: "请基于以上搜索结果，使用 create_artifact 工具完成我最初的请求。生成完整的、高质量的内容。" });
+  }
+
+  return compressed;
+}
+
+function safeParseJson(str) {
+  try {
+    return JSON.parse(str || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function toolDisplayArgs(name, args) {
+  if (name === "web_search") return { query: args?.query };
+  if (name === "create_artifact") return { title: args?.title, type: args?.type };
+  return {};
 }
 
 async function braveSearch(query) {
@@ -393,42 +690,6 @@ async function braveSearch(query) {
   }));
 }
 
-function formatSearchContext(results) {
-  if (!results.length) return "";
-  return [
-    "【已检索资料】以下资料由系统检索得到。请把它们视为用户粘贴给你的材料，直接基于资料回答；不要说你不能浏览网页。使用资料时标注来源 URL。",
-    ...results.map((item, index) => `[${index + 1}] ${item.title}\nURL: ${item.url}\n摘要: ${item.description}`),
-  ].join("\n\n");
-}
-
-function attachSearchContext(messages, searchContext) {
-  const cloned = messages.map((message) => ({ ...message }));
-  for (let i = cloned.length - 1; i >= 0; i -= 1) {
-    if (cloned[i]?.role !== "user") continue;
-    cloned[i].content = prependTextToContent(cloned[i].content, `${searchContext}\n\n请先阅读上面的已检索资料，再回答下面的问题。\n\n【用户问题】`);
-    return cloned;
-  }
-  return cloned;
-}
-
-function prependTextToContent(content, prefix) {
-  if (Array.isArray(content)) {
-    const next = [...content];
-    const textPart = next.find((part) => part?.type === "text");
-    if (textPart) textPart.text = `${prefix}${textPart.text || ""}`;
-    else next.unshift({ type: "text", text: prefix });
-    return next;
-  }
-  return `${prefix}${String(content || "")}`;
-}
-
-function latestUserText(messages) {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i]?.role !== "user") continue;
-    return contentToText(messages[i].content);
-  }
-  return "";
-}
 
 function contentToText(content) {
   if (Array.isArray(content)) {

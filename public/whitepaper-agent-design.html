@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Agent 设计与实现白皮书</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#f4efe7; color:#2d251d; font-family:-apple-system,"Noto Sans SC","Segoe UI",sans-serif; line-height:1.78; font-size:15.5px; }
+  .page { max-width:840px; margin:0 auto; background:#fffaf2; min-height:100vh; padding:56px 52px 80px; border-left:1px solid #e4d7c6; border-right:1px solid #e4d7c6; }
+  h1 { font-size:30px; text-align:center; border-bottom:2px solid #bd5d3a; padding-bottom:14px; margin:0 0 6px; color:#1a1510; }
+  .sub { text-align:center; color:#766b5f; font-size:14px; margin-bottom:36px; }
+  .toc { background:#f8f1e8; border:1px solid #e4d7c6; border-radius:12px; padding:18px 26px; margin-bottom:32px; }
+  .toc h2 { margin:0 0 8px; font-size:17px; }
+  .toc ol { margin:0; padding-left:1.4em; } .toc li { margin:3px 0; font-size:13.5px; }
+  .toc a { color:#93482d; text-decoration:none; } .toc a:hover { text-decoration:underline; }
+  h2 { font-size:22px; margin:40px 0 14px; padding-bottom:6px; border-bottom:1px solid #eadfcc; color:#1a1510; }
+  h3 { font-size:18px; margin:24px 0 10px; color:#3a2e22; }
+  h4 { font-size:15.5px; margin:18px 0 6px; color:#5a4a3a; font-weight:600; }
+  p { margin:0 0 12px; } ul,ol { padding-left:1.3em; margin:0 0 12px; } li { margin:3px 0; }
+  code { background:#eee4d6; padding:1px 5px; border-radius:3px; font-family:"JetBrains Mono",ui-monospace,monospace; font-size:13.5px; }
+  pre { background:#1e1e2e; color:#cdd6f4; padding:16px 18px; border-radius:8px; overflow-x:auto; font-family:"JetBrains Mono",ui-monospace,monospace; font-size:12.5px; line-height:1.55; margin:0 0 14px; }
+  pre code { background:none; padding:0; color:inherit; font-size:inherit; }
+  .kw { color:#cba6f7; } .str { color:#a6e3a1; } .cm { color:#6c7086; font-style:italic; } .fn { color:#89b4fa; } .num { color:#fab387; }
+  blockquote { border-left:4px solid #bd5d3a; background:#f8f1e8; margin:0 0 14px; padding:12px 16px; border-radius:0 8px 8px 0; color:#4e4034; }
+  table { width:100%; border-collapse:collapse; margin:14px 0; font-size:13.5px; }
+  th,td { border:1px solid #e4d7c6; padding:8px 10px; text-align:left; vertical-align:top; }
+  th { background:#f3eadc; font-weight:600; }
+  .dia { background:#faf6ee; border:1px solid #e4d7c6; border-radius:8px; padding:16px 18px; margin:14px 0; font-family:ui-monospace,monospace; font-size:12.5px; line-height:1.5; white-space:pre; overflow-x:auto; }
+  .note { background:#e8f4e8; border-left:4px solid #4a9; padding:10px 14px; border-radius:0 8px 8px 0; margin:12px 0; font-size:14px; }
+  .warn { background:#fff3cd; border-left:4px solid #d90; padding:10px 14px; border-radius:0 8px 8px 0; margin:12px 0; font-size:14px; }
+  hr { border:none; border-top:1px solid #eadfcc; margin:30px 0; }
+  @media(max-width:860px){ .page{padding:28px 18px 60px;} }
+</style>
+</head>
+<body><div class="page">
+
+<h1>AI Agent 设计与实现</h1>
+<p class="sub">拆解 Claude.ai · Claude Code · Codex · Cursor 的 Agent 架构<br>2026-05-05 · 技术白皮书</p>
+
+<div class="toc"><h2>目录</h2>
+<ol>
+<li><a href="#c1">工具调用的本质：模型能力 vs 系统工程</a></li>
+<li><a href="#c2">Agent 核心架构：ReAct 与 Tool Use Loop</a></li>
+<li><a href="#c3">拆解 Claude.ai 的 Agent 设计</a></li>
+<li><a href="#c4">拆解 Claude Code 的 Agent 设计</a></li>
+<li><a href="#c5">横向对比：Claude Code vs Codex vs Cursor</a></li>
+<li><a href="#c6">设计你自己的 Agent 系统</a></li>
+</ol></div>
+
+<!-- ═══════════════════════ 第一章 ═══════════════════════ -->
+<h2 id="c1">一、工具调用的本质：模型能力 vs 系统工程</h2>
+
+<h3>1.1 三层协作</h3>
+<p>工具调用是<strong>模型训练 + API 层转换 + 应用层执行</strong>三层协作的结果：</p>
+
+<div class="dia">┌────────────── 应用层（你的代码 / Claude Code）──────────────┐
+│  定义工具 → 发请求 → 收到 tool_use → 执行工具 → 回传结果     │
+├────────────── API 层（Anthropic / OpenAI 服务端）─────────────┤
+│  tools JSON → 转成 prompt 文本 → 解析模型输出 → 结构化返回    │
+├────────────── 模型层（Claude / GPT）─────────────────────────┤
+│  理解工具描述 → 决策是否调用 → 生成结构化 JSON → 整合结果回答  │
+└──────────────────────────────────────────────────────────────┘</div>
+
+<h3>1.2 模型层：训练赋予的四个能力</h3>
+<ol>
+<li><strong>意图识别</strong> — 判断"用户的请求是否需要外部信息或动作"</li>
+<li><strong>工具选择</strong> — 从可用工具列表中选最合适的（可以选多个）</li>
+<li><strong>参数生成</strong> — 根据工具 schema 生成正确的 JSON 参数</li>
+<li><strong>结果整合</strong> — 基于工具返回的结果，综合生成最终回答</li>
+</ol>
+
+<p>这些能力是通过 <strong>Supervised Fine-Tuning (SFT)</strong> 和 <strong>RLHF</strong> 训练出来的。训练数据大致如下：</p>
+
+<pre><code><span class="cm">// 训练样本示例（简化）</span>
+<span class="kw">System</span>: You have tools: web_search(query), calculator(expr)
+<span class="kw">Human</span>: 北京今天多少度？
+<span class="kw">Assistant</span>: [<span class="fn">tool_use</span>: web_search(<span class="str">"北京 今天 气温"</span>)]
+<span class="kw">Tool Result</span>: 北京今日最高温 28°C，最低 18°C，晴
+<span class="kw">Assistant</span>: 北京今天最高气温 28°C，最低 18°C，天气晴朗。</code></pre>
+
+<p>模型见过数百万条这样的样本后，学会了一个关键判断：<strong>"我不知道答案 → 有可用工具 → 应该调用"</strong>。</p>
+
+<h3>1.3 API 层：看不见的翻译官</h3>
+<p>当你向 Anthropic API 发送带 <code>tools</code> 参数的请求时，API 层做了这些事：</p>
+
+<div class="dia">你发送的:                              模型实际看到的 prompt:
+{                                       In this environment you have
+  "tools": [{                           access to tools:
+    "name": "web_search",
+    "description": "搜索网页",           web_search: 搜索网页
+    "input_schema": {                   Parameters: {"query": string}
+      "properties": {
+        "query": {"type":"string"}      (如需使用工具，输出特定格式的
+      }                                  XML/JSON 块)
+    }
+  }]
+}</div>
+
+<p>API 层是双向翻译：</p>
+<ul>
+<li><strong>输入方向</strong>：把 <code>tools</code> JSON 转成模型理解的 prompt 文本</li>
+<li><strong>输出方向</strong>：检测模型输出中的工具调用格式，解析为结构化的 <code>tool_use</code> response</li>
+</ul>
+
+<div class="note">这就是为什么不同 API 提供商（Anthropic vs OpenAI）的工具格式不同 — 它们的"翻译层"实现不同，但本质都是在做同一件事。</div>
+
+<h3>1.4 应用层：你写的循环</h3>
+<p>模型只负责"决定调用什么工具"。<strong>实际执行工具、管理上下文、控制循环</strong>全部是应用层的工作。这就是我们在 <code>server.mjs</code> 中写的 <code>chat()</code> 函数做的事。</p>
+
+<hr>
+
+<!-- ═══════════════════════ 第二章 ═══════════════════════ -->
+<h2 id="c2">二、Agent 核心架构：ReAct 与 Tool Use Loop</h2>
+
+<h3>2.1 ReAct 范式</h3>
+<p>几乎所有现代 Agent 都遵循 <strong>ReAct（Reasoning + Acting）</strong>范式，由 Yao et al. (2022) 提出：</p>
+
+<div class="dia">               ┌──────────────┐
+               │   用户输入    │
+               └──────┬───────┘
+                      ▼
+         ┌────────────────────────┐
+         │   Reason（推理/思考）    │ ← 模型分析任务，决定下一步
+         └────────────┬───────────┘
+                      ▼
+              ┌───────────────┐
+              │  需要工具吗？   │
+              └───┬───────┬───┘
+                  │是     │否
+                  ▼       ▼
+         ┌────────────┐  ┌──────────────┐
+         │ Act（行动）  │  │  输出最终回答  │
+         │ 调用工具    │  └──────────────┘
+         └──────┬─────┘
+                ▼
+         ┌────────────┐
+         │ Observe     │ ← 观察工具返回的结果
+         │ （观察结果） │
+         └──────┬─────┘
+                │
+                └──→ 回到 Reason（可能需要更多工具）</div>
+
+<h3>2.2 Tool Use Loop 的工程实现</h3>
+<p>ReAct 在工程上的实现就是一个 <strong>while 循环</strong>：</p>
+
+<pre><code><span class="kw">async function</span> <span class="fn">agentLoop</span>(userMessage) {
+  <span class="kw">const</span> messages = [systemPrompt, userMessage];
+
+  <span class="kw">for</span> (<span class="kw">let</span> round = <span class="num">0</span>; round &lt; MAX_ROUNDS; round++) {
+    <span class="kw">const</span> response = <span class="kw">await</span> callLLM(messages, tools);
+
+    <span class="kw">if</span> (response.stop_reason === <span class="str">"tool_use"</span>) {
+      <span class="cm">// 模型想用工具 → 执行 → 结果追加到 messages</span>
+      <span class="kw">for</span> (<span class="kw">const</span> toolCall <span class="kw">of</span> response.tool_uses) {
+        <span class="kw">const</span> result = <span class="kw">await</span> executeTool(toolCall);
+        messages.push(assistantMsg, toolResultMsg);
+      }
+      <span class="kw">continue</span>; <span class="cm">// 下一轮 → 模型看到结果后继续推理</span>
+    }
+
+    <span class="cm">// 模型直接回答 → 结束循环</span>
+    <span class="kw">return</span> response.text;
+  }
+}</code></pre>
+
+<p>这段代码就是所有 Agent 的核心骨架。Claude.ai、Claude Code、Codex 本质上都是这个循环的不同实现。</p>
+
+<h3>2.3 关键设计决策</h3>
+<table>
+<tr><th>决策点</th><th>选项</th><th>权衡</th></tr>
+<tr><td>最大轮数</td><td>通常 5–20 轮</td><td>太少限制能力，太多浪费 token 和时间</td></tr>
+<tr><td>流式 vs 非流式</td><td>流式更好的 UX</td><td>流式需要实时解析 tool_calls，复杂度高</td></tr>
+<tr><td>并行工具调用</td><td>模型可一次返回多个 tool_use</td><td>并行执行更快，但需要处理依赖关系</td></tr>
+<tr><td>上下文管理</td><td>累积 / 压缩 / 滑动窗口</td><td>累积最准确但 token 消耗大</td></tr>
+<tr><td>错误处理</td><td>重试 / 跳过 / 让模型决定</td><td>把错误信息返回给模型通常是最好的策略</td></tr>
+</table>
+
+<hr>
+
+<!-- ═══════════════════════ 第三章 ═══════════════════════ -->
+<h2 id="c3">三、拆解 Claude.ai 的 Agent 设计</h2>
+
+<h3>3.1 整体架构</h3>
+<div class="dia">┌─────────── claude.ai 前端 ──────────┐
+│  聊天界面 │ Artifact 面板 │ 文件上传  │
+└─────────────────┬───────────────────┘
+                  │ WebSocket / SSE
+                  ▼
+┌─────────── claude.ai 后端 ──────────┐
+│  Session 管理 │ Tool Use Loop       │
+│  ┌──────────────────────────────┐   │
+│  │  System Prompt（含工具描述）   │   │
+│  │  + 用户消息                  │   │
+│  │  → Claude API（/v1/messages）│   │
+│  │  → tool_use? 执行并循环      │   │
+│  │  → end_turn? 流式返回前端    │   │
+│  └──────────────────────────────┘   │
+│  工具执行器:                         │
+│  ├─ web_search → Brave API          │
+│  ├─ code_execution → JS Sandbox     │
+│  ├─ artifact → 前端 Artifact 面板    │
+│  └─ file_read → 解析用户上传文件     │
+└─────────────────────────────────────┘</div>
+
+<h3>3.2 工具清单与设计思路</h3>
+
+<h4>Web Search</h4>
+<p>模型自主决定搜索词，可以多次搜索、逐步深入。这比传统的"用户勾选联网"体验更好，因为模型知道什么时候需要搜索、搜什么最有效。</p>
+
+<h4>Code Execution（Analysis Tool）</h4>
+<p>沙盒化的 JavaScript 运行环境。模型写代码 → 服务端在沙盒中执行 → 结果（文本/图表）返回给模型。典型用途：数据分析、数学计算、图表生成。</p>
+
+<h4>Artifacts</h4>
+<p>Claude.ai 最有辨识度的功能。本质是一个<strong>结构化输出工具</strong>：</p>
+<ul>
+<li>模型调用 <code>create_artifact</code>，指定类型（React 组件/HTML/SVG/Markdown/Mermaid）</li>
+<li>前端在右侧面板中渲染预览（iframe 沙盒）</li>
+<li>支持<strong>版本迭代</strong>：用户说"改成蓝色"→ 模型生成 v2 → 可在版本间切换</li>
+</ul>
+
+<h4>Extended Thinking</h4>
+<p>不是传统意义的工具，而是模型的内部推理过程。通过 API 的 <code>thinking</code> 参数控制。模型在调用工具前先"思考"策略，用户可以看到思考过程。</p>
+
+<h3>3.3 System Prompt 设计</h3>
+<p>Claude.ai 的 system prompt 是整个 Agent 行为的蓝图。核心要素：</p>
+<ol>
+<li><strong>身份定义</strong> — "你是 Claude，由 Anthropic 开发"</li>
+<li><strong>工具使用指导</strong> — 什么时候用什么工具、不用工具的场景</li>
+<li><strong>Artifact 规范</strong> — 什么内容该创建 Artifact、格式要求</li>
+<li><strong>安全边界</strong> — 拒绝什么请求、如何处理敏感内容</li>
+<li><strong>输出风格</strong> — 简洁、直接、不过度解释</li>
+</ol>
+
+<hr>
+
+<!-- ═══════════════════════ 第四章 ═══════════════════════ -->
+<h2 id="c4">四、拆解 Claude Code 的 Agent 设计</h2>
+
+<p>Claude Code 是一个<strong>比 claude.ai 复杂得多的 Agent 系统</strong>。它不是简单的聊天+工具，而是一个完整的软件工程 Agent。</p>
+
+<h3>4.1 架构总览</h3>
+<div class="dia">┌────────────────── Claude Code CLI ──────────────────┐
+│                                                      │
+│  ┌─────────── Agentic Loop ───────────┐              │
+│  │                                    │              │
+│  │  System Prompt（极长，~3000行）      │              │
+│  │  + 工具定义（10+ 个原生工具）        │              │
+│  │  + 用户消息                        │              │
+│  │       │                            │              │
+│  │       ▼                            │              │
+│  │  Claude API (/v1/messages)         │              │
+│  │       │                            │              │
+│  │       ▼                            │              │
+│  │  stop_reason == tool_use?          │              │
+│  │   ├─ 是 → 权限检查 → 执行 → 循环   │              │
+│  │   └─ 否 → 输出给用户               │              │
+│  └────────────────────────────────────┘              │
+│                                                      │
+│  ┌─ 权限系统 ─┐  ┌─ 上下文管理 ─┐  ┌─ Hook 系统 ─┐  │
+│  │ 每个工具调  │  │ 自动压缩     │  │ 生命周期事件 │  │
+│  │ 用需用户批  │  │ 超过限制时   │  │ 可注入自定  │  │
+│  │ 准或自动批  │  │ AI 总结历史  │  │ 义行为      │  │
+│  └────────────┘  └──────────────┘  └──────────────┘  │
+│                                                      │
+│  ┌─ 子 Agent ──┐  ┌─ Plan 模式 ─┐  ┌─ Worktree ──┐  │
+│  │ 并行执行独  │  │ 先规划后执  │  │ Git 隔离分  │  │
+│  │ 立任务      │  │ 行，可分模  │  │ 支并行开发  │  │
+│  └─────────────┘  └──────────────┘  └──────────────┘  │
+└──────────────────────────────────────────────────────┘</div>
+
+<h3>4.2 原生工具体系</h3>
+<p>Claude Code 提供了一套专为软件工程设计的工具：</p>
+
+<table>
+<tr><th>工具</th><th>功能</th><th>设计理由</th></tr>
+<tr><td><code>Read</code></td><td>读取文件内容（支持行范围）</td><td>比 <code>cat</code> 更安全，有行号、支持图片/PDF</td></tr>
+<tr><td><code>Write</code></td><td>创建/覆写文件</td><td>完整文件写入，适合新文件</td></tr>
+<tr><td><code>Edit</code></td><td>精确字符串替换</td><td>只发 diff，token 效率高，避免覆盖整个文件</td></tr>
+<tr><td><code>Bash</code></td><td>执行 shell 命令</td><td>万能后备，但鼓励用专用工具</td></tr>
+<tr><td><code>Glob</code></td><td>按模式查找文件</td><td>比 <code>find</code> 更快，按修改时间排序</td></tr>
+<tr><td><code>Grep</code></td><td>搜索文件内容</td><td>基于 ripgrep，比 <code>grep</code> 更强</td></tr>
+<tr><td><code>Agent</code></td><td>启动子 Agent</td><td>并行执行独立任务，隔离上下文</td></tr>
+</table>
+
+<div class="note"><strong>设计哲学</strong>：专用工具优于通用工具。<code>Edit</code> 比 <code>Bash</code>+<code>sed</code> 更安全、更省 token、用户更容易审查。<code>Grep</code> 比 <code>Bash</code>+<code>grep</code> 输出更规范。这种"禁止用 Bash 做能用专用工具做的事"的策略，在 system prompt 中被明确要求。</div>
+
+<h3>4.3 权限系统：Human-in-the-Loop</h3>
+<p>Claude Code 的核心安全设计：<strong>每个工具调用都要用户批准</strong>（除非配置了自动批准）。</p>
+
+<pre><code><span class="cm">// 权限分级</span>
+读文件    → 通常自动批准（低风险）
+写/编辑   → 需要用户确认（中风险，显示 diff）
+Bash 命令 → 需要用户确认（高风险，显示命令）
+git push  → 特别警告（不可逆操作）
+rm -rf    → 强烈警告（破坏性操作）</code></pre>
+
+<p>这是 Agent 设计中的关键权衡：<strong>自主性 vs 安全性</strong>。完全自主的 Agent 效率高但风险大；完全需要批准的 Agent 安全但效率低。Claude Code 的方案是分级权限 + 可配置的自动批准。</p>
+
+<h3>4.4 上下文管理：解决 200K token 限制</h3>
+<p>长时间工作的 Agent 会累积大量上下文（代码内容、命令输出、工具结果）。Claude Code 的策略：</p>
+
+<ol>
+<li><strong>自动压缩（auto-condense）</strong>— 当上下文接近限制时，用 AI 总结历史对话，保留关键信息</li>
+<li><strong>标准截断</strong>— 保留首尾对话，丢弃中间部分（分 50% / 25% 两档）</li>
+<li><strong>文件读取去重</strong>— 同一文件不重复读取</li>
+<li><strong>Prompt Caching</strong>— Anthropic 的 5 分钟缓存，避免重复发送 system prompt</li>
+</ol>
+
+<h3>4.5 子 Agent 系统</h3>
+<p>Claude Code 可以<strong>启动子 Agent 并行工作</strong>。每个子 Agent 有独立的上下文窗口和工具集。</p>
+
+<pre><code><span class="cm">// 主 Agent 启动两个子 Agent 并行</span>
+Agent({
+  description: <span class="str">"研究 API 文档"</span>,
+  prompt: <span class="str">"查找所有 REST endpoint..."</span>
+})
+Agent({
+  description: <span class="str">"运行测试套件"</span>,
+  prompt: <span class="str">"执行 npm test 并分析失败..."</span>
+})</code></pre>
+
+<p>子 Agent 的设计要点：</p>
+<ul>
+<li>主 Agent 发送<strong>自包含的 prompt</strong>（子 Agent 看不到主对话历史）</li>
+<li>子 Agent 完成后返回<strong>摘要结果</strong>给主 Agent</li>
+<li>可以在后台运行（<code>run_in_background</code>），主 Agent 继续其他工作</li>
+<li>支持不同的 <code>subagent_type</code>（Explore、Plan 等，各有不同工具集）</li>
+</ul>
+
+<h3>4.6 Plan 模式</h3>
+<p>对于复杂任务，Claude Code 支持"先规划再执行"：</p>
+<ol>
+<li><strong>Plan 阶段</strong>：模型探索代码库、分析需求、提出实现方案（只用读取工具，不修改）</li>
+<li><strong>用户审查</strong>：用户查看并批准/修改方案</li>
+<li><strong>Act 阶段</strong>：模型按照方案执行（读取+写入+命令）</li>
+</ol>
+<p>Plan 和 Act 可以使用<strong>不同的模型</strong>（比如 Plan 用快速模型，Act 用强力模型）。</p>
+
+<h3>4.7 Hook 系统</h3>
+<p>Hook 是 Claude Code 的扩展点，允许用户在 Agent 生命周期的关键节点注入自定义行为：</p>
+<table>
+<tr><th>Hook</th><th>触发时机</th><th>用途示例</th></tr>
+<tr><td>PreToolUse</td><td>工具执行前</td><td>阻止危险命令、修改参数</td></tr>
+<tr><td>PostToolUse</td><td>工具执行后</td><td>记录日志、触发 CI</td></tr>
+<tr><td>UserPromptSubmit</td><td>用户提交消息时</td><td>输入验证、上下文注入</td></tr>
+<tr><td>PreCompact</td><td>上下文压缩前</td><td>保留关键信息</td></tr>
+<tr><td>Notification</td><td>系统通知</td><td>桌面通知、Slack 推送</td></tr>
+</table>
+
+<hr>
+
+<!-- ═══════════════════════ 第五章 ═══════════════════════ -->
+<h2 id="c5">五、横向对比：Claude Code vs Codex vs Cursor</h2>
+
+<h3>5.1 定位差异</h3>
+<table>
+<tr><th>维度</th><th>Claude Code</th><th>OpenAI Codex</th><th>Cursor</th></tr>
+<tr><td><strong>形态</strong></td><td>CLI + IDE 扩展</td><td>云端 Agent</td><td>整合式 IDE</td></tr>
+<tr><td><strong>交互方式</strong></td><td>终端对话</td><td>Web 面板+PR</td><td>IDE 内嵌聊天</td></tr>
+<tr><td><strong>执行环境</strong></td><td>本地机器</td><td>云端沙盒容器</td><td>本地机器</td></tr>
+<tr><td><strong>模型</strong></td><td>Claude (Opus/Sonnet)</td><td>codex-1 (o3 衍生)</td><td>多模型(Claude/GPT/自有)</td></tr>
+<tr><td><strong>定价</strong></td><td>按 token</td><td>按任务</td><td>订阅制</td></tr>
+</table>
+
+<h3>5.2 Agent 架构对比</h3>
+
+<h4>Claude Code — 实时交互式 Agent</h4>
+<ul>
+<li><strong>同步循环</strong>：用户发消息 → 模型回应 → 用户批准/修改 → 继续</li>
+<li><strong>人在回路</strong>：每一步都可审查和干预</li>
+<li><strong>透明度高</strong>：所有工具调用、文件修改对用户可见</li>
+<li><strong>上下文持久</strong>：一次对话可以持续数小时，自动压缩管理</li>
+<li><strong>适合场景</strong>：探索性开发、调试、复杂重构、需要判断的任务</li>
+</ul>
+
+<h4>Codex — 异步任务式 Agent</h4>
+<ul>
+<li><strong>异步执行</strong>：用户提交任务 → Agent 在云端沙盒独立工作 → 完成后提交 PR</li>
+<li><strong>无人值守</strong>：不需要用户实时参与，完全自主</li>
+<li><strong>沙盒隔离</strong>：每个任务在独立容器中运行，有完整的 Linux 环境</li>
+<li><strong>结果交付</strong>：通过 Git PR 交付，用户事后审查</li>
+<li><strong>适合场景</strong>：明确的小任务（fix bug、加 feature）、批量处理、CI 集成</li>
+</ul>
+
+<h4>Cursor — IDE 集成式 Agent</h4>
+<ul>
+<li><strong>三种模式</strong>：Tab 补全（快速、小模型）、Chat（问答）、Agent（全功能）</li>
+<li><strong>代码索引</strong>：建立整个代码库的语义索引，Agent 可以精确检索</li>
+<li><strong>Apply 模型</strong>：专门训练的小模型用于高效应用代码修改（diff → 完整文件）</li>
+<li><strong>IDE 深度集成</strong>：理解打开的文件、光标位置、LSP 诊断信息</li>
+<li><strong>适合场景</strong>：日常编码、快速迭代、IDE 工作流中的 AI 辅助</li>
+</ul>
+
+<h3>5.3 工具设计对比</h3>
+<table>
+<tr><th>工具类别</th><th>Claude Code</th><th>Codex</th><th>Cursor</th></tr>
+<tr><td>文件读取</td><td><code>Read</code>（行范围+图片+PDF）</td><td>直接文件系统访问</td><td>IDE API + 索引</td></tr>
+<tr><td>文件编辑</td><td><code>Edit</code>（精确替换）</td><td>直接写入</td><td>Apply 模型（diff）</td></tr>
+<tr><td>代码搜索</td><td><code>Grep</code>+<code>Glob</code></td><td>标准命令行</td><td>语义索引 + ripgrep</td></tr>
+<tr><td>命令执行</td><td><code>Bash</code>（需批准）</td><td>完全自由（沙盒内）</td><td><code>Terminal</code>（需批准）</td></tr>
+<tr><td>网页搜索</td><td><code>WebSearch</code></td><td>不支持</td><td><code>@web</code></td></tr>
+<tr><td>子任务</td><td><code>Agent</code>（子 Agent）</td><td>不支持</td><td>不支持</td></tr>
+<tr><td>扩展性</td><td>MCP 协议 + Hook</td><td>容器环境定制</td><td>MCP 协议</td></tr>
+</table>
+
+<h3>5.4 核心设计哲学差异</h3>
+
+<blockquote>
+<strong>Claude Code</strong>："我是你身边的结对编程伙伴。每一步我都征求你的意见，你随时可以纠正我。"<br>
+<strong>Codex</strong>："把任务交给我，去喝杯咖啡，回来看 PR 就行。"<br>
+<strong>Cursor</strong>："我住在你的 IDE 里，从自动补全到完整 Agent，无缝切换。"
+</blockquote>
+
+<h3>5.5 安全模型对比</h3>
+<table>
+<tr><th>安全策略</th><th>Claude Code</th><th>Codex</th><th>Cursor</th></tr>
+<tr><td>执行隔离</td><td>本地（无隔离）</td><td>云端沙盒容器</td><td>本地（无隔离）</td></tr>
+<tr><td>权限控制</td><td>分级批准 + YOLO 模式</td><td>沙盒 = 天然隔离</td><td>工具调用批准</td></tr>
+<tr><td>代码审查</td><td>Diff 实时预览</td><td>PR Review</td><td>Diff 预览</td></tr>
+<tr><td>网络访问</td><td>完全（本地环境）</td><td>受限（白名单）</td><td>完全（本地环境）</td></tr>
+<tr><td>回滚能力</td><td>Checkpoint 系统</td><td>Git 分支</td><td>文件级撤销</td></tr>
+</table>
+
+<p>Codex 的沙盒模型最安全（Agent 在隔离容器中，无法影响生产环境），但也最受限（无法访问本地资源）。Claude Code 和 Cursor 在本地运行，能力最强但风险也最大，通过人工审批来控制风险。</p>
+
+<hr>
+
+<!-- ═══════════════════════ 第六章 ═══════════════════════ -->
+<h2 id="c6">六、设计你自己的 Agent 系统</h2>
+
+<p>基于以上分析，设计 Agent 时的关键检查清单：</p>
+
+<h3>6.1 核心循环</h3>
+<pre><code><span class="cm">// 最小 Agent 骨架（你已经实现了这个！）</span>
+<span class="kw">while</span> (round &lt; MAX_ROUNDS) {
+  response = <span class="kw">await</span> llm.call(messages, tools);
+  <span class="kw">if</span> (response.wants_tools) {
+    results = <span class="kw">await</span> execute(response.tool_calls);
+    messages.append(response, results);
+  } <span class="kw">else</span> {
+    <span class="kw">return</span> response.text;
+  }
+}</code></pre>
+
+<h3>6.2 工具设计原则</h3>
+<ol>
+<li><strong>最小权限</strong> — 每个工具只做一件事，避免万能工具</li>
+<li><strong>清晰的 schema</strong> — description 和参数描述是模型决策的依据</li>
+<li><strong>有限的输出</strong> — 工具返回不要太长（会占用 context），做好截断</li>
+<li><strong>优雅的错误</strong> — 把错误信息返回给模型，让它自己决定下一步</li>
+<li><strong>可观测性</strong> — 每次工具调用都要让用户知道发生了什么</li>
+</ol>
+
+<h3>6.3 System Prompt 设计</h3>
+<ol>
+<li><strong>角色定义</strong> — 你是谁、你的能力边界</li>
+<li><strong>工具指导</strong> — 什么时候用什么工具（正例和反例）</li>
+<li><strong>输出规范</strong> — 回复的格式、长度、语言</li>
+<li><strong>安全约束</strong> — 不能做什么</li>
+</ol>
+
+<div class="warn"><strong>常见陷阱</strong>：System prompt 过长会导致模型"注意力分散"，遵从度下降。Claude Code 的 ~3000 行 prompt 之所以有效，是因为 Claude 系列模型专门针对长 prompt 做了优化。自己设计时建议控制在 500-1000 字。</div>
+
+<h3>6.4 进阶能力路线图</h3>
+<p>你的 claude-lite 已经实现了第 1 级。后续可以按需添加：</p>
+
+<table>
+<tr><th>级别</th><th>能力</th><th>实现复杂度</th></tr>
+<tr><td>1 ✅</td><td>基础 Tool Use Loop + Web Search + Artifact</td><td>已完成</td></tr>
+<tr><td>2</td><td>Code Execution（沙盒 JS/Python）</td><td>中 — Node.js vm 模块或 Docker</td></tr>
+<tr><td>3</td><td>URL 抓取 + 深度研究</td><td>低 — fetch + html-to-text</td></tr>
+<tr><td>4</td><td>图片生成（你已有 LuckyAPI gpt-image-2）</td><td>低</td></tr>
+<tr><td>5</td><td>Artifact 版本管理（v1/v2/v3 切换）</td><td>中 — 前端状态管理</td></tr>
+<tr><td>6</td><td>文件上传分析（PDF/CSV → 结构化数据）</td><td>中</td></tr>
+<tr><td>7</td><td>Extended Thinking 展示</td><td>低 — 解析 thinking 块</td></tr>
+<tr><td>8</td><td>多 Agent 协作</td><td>高 — 需要任务编排系统</td></tr>
+</table>
+
+<hr>
+
+<h3>结语</h3>
+<p>AI Agent 的核心并不神秘 — 它是一个 <strong>while 循环</strong>，里面是一个 <strong>LLM 调用</strong>和一组<strong>工具</strong>。真正的挑战在于工程细节：上下文管理、错误恢复、安全控制、用户体验。你的 claude-lite 已经走出了最关键的第一步：从"聊天机器人"变成了"Agent"。</p>
+
+</div></body></html>
