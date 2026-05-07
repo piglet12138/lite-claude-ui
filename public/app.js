@@ -52,6 +52,7 @@ const els = {
   fileInput: document.querySelector("#fileInput"),
   attachmentBar: document.querySelector("#attachmentBar"),
   copyDoc: document.querySelector("#copyDoc"),
+  shareDoc: document.querySelector("#shareDoc"),
   downloadDoc: document.querySelector("#downloadDoc"),
   downloadHtml: document.querySelector("#downloadHtml"), // may be null
   uploadGoogleDoc: document.querySelector("#uploadGoogleDoc"),
@@ -157,6 +158,16 @@ function wireEvents() {
   });
   document.querySelector("#themeToggle")?.addEventListener("click", toggleTheme);
   els.copyDoc?.addEventListener("click", copyCurrentDoc);
+  els.shareDoc?.addEventListener("click", shareCurrentDoc);
+  // Show share button if Web Share API is available (mobile)
+  if (els.shareDoc) {
+    if (navigator.share) {
+      
+      els.shareDoc.classList.add("visible");
+    } else {
+      els.shareDoc.classList.remove("visible");
+    }
+  }
   els.downloadDoc.addEventListener("click", () => {
     const doc = activeDocument();
     if (!doc) return;
@@ -176,6 +187,7 @@ function wireEvents() {
     state.docOpen = false;
     state.docAutoOpenSuppressedThreadId = state.activeId;
     renderDocumentPanel();
+    renderDocFab();
   });
   els.toggleDocPanel.addEventListener("click", () => {
     state.docOpen = !state.docOpen;
@@ -183,6 +195,7 @@ function wireEvents() {
     else state.docAutoOpenSuppressedThreadId = state.activeId;
     if (state.docOpen && !state.activeDocId && threadDocuments()[0]) state.activeDocId = threadDocuments()[0].id;
     renderDocumentPanel();
+    renderDocFab();
   });
   els.sidebarToggle.addEventListener("click", () => document.body.classList.toggle("sidebar-open"));
 
@@ -348,8 +361,13 @@ window.addEventListener("beforeunload", () => {
 });
 
 // Auto-refresh active thread when tab regains focus (cross-device sync)
+let lastRefreshTime = 0;
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && !state.streaming) {
+    const now = Date.now();
+    // Cooldown: don't refresh more than once per 5 seconds (prevents download dialog flicker)
+    if (now - lastRefreshTime < 5000) return;
+    lastRefreshTime = now;
     refreshActiveThread();
   }
 });
@@ -451,15 +469,32 @@ async function loadThreadData(threadId, forceReload) {
     } else {
       thread.messages = mappedServer;
     }
-    thread.documents = documents.map(d => ({
+    // Merge documents: keep local docs not on server, prefer version with more content
+    const serverDocs = documents.map(d => ({
       id: d.id,
       title: d.title,
       type: d.type,
       content: d.content,
       language: d.language,
       description: d.description,
+      filePath: d.filePath || d.file_path || "",
       versions: d.versions || [],
     }));
+    const serverDocIds = new Set(serverDocs.map(d => d.id));
+    const localDocs = (thread.documents || []);
+    // Keep local-only docs (not yet synced to server)
+    const localOnly = localDocs.filter(d => !serverDocIds.has(d.id));
+    // For docs on both sides, prefer the one with more content
+    const merged = serverDocs.map(sd => {
+      const ld = localDocs.find(d => d.id === sd.id);
+      if (ld && (ld.content || "").length > (sd.content || "").length) return ld;
+      // Preserve filePath from local if server lost it
+      if (ld?.filePath && !sd.filePath) sd.filePath = ld.filePath;
+      return sd;
+    });
+    thread.documents = [...merged, ...localOnly];
+    // Re-sync any local-only docs to server
+    for (const doc of localOnly) syncDocument(threadId, doc);
     thread._loaded = true;
     saveThreads(); // cache locally
     render();
@@ -484,6 +519,33 @@ function render() {
   renderAttachments();
   renderDocumentPanel();
   renderSearchToggle();
+  renderDocFab();
+}
+
+// Floating action button for opening documents on mobile
+function renderDocFab() {
+  let fab = document.querySelector("#docFab");
+  const docs = threadDocuments();
+  const shouldShow = docs.length > 0 && !state.docOpen && window.innerWidth <= 1020;
+  if (!shouldShow) {
+    if (fab) fab.remove();
+    return;
+  }
+  if (!fab) {
+    fab = document.createElement("button");
+    fab.id = "docFab";
+    fab.className = "doc-fab";
+    fab.setAttribute("aria-label", "打开文档");
+    fab.addEventListener("click", () => {
+      state.docOpen = true;
+      if (!state.activeDocId && docs[0]) state.activeDocId = docs[0].id;
+      render();
+    });
+    document.body.append(fab);
+  }
+  const count = docs.length;
+  const latest = docs[0]?.title || "文档";
+  fab.innerHTML = `<span class="doc-fab-icon">◆</span><span class="doc-fab-label">${escapeHtml(latest.slice(0, 12))}${latest.length > 12 ? "…" : ""}${count > 1 ? " +" + (count - 1) : ""}</span>`;
 }
 
 function renderThreads() {
@@ -1821,6 +1883,86 @@ async function copyCurrentDoc() {
   await navigator.clipboard.writeText(doc.content);
   els.copyDoc.textContent = "已复制";
   setTimeout(() => (els.copyDoc.textContent = "复制文档"), 1200);
+}
+
+function shareCurrentDoc() {
+  const doc = activeDocument();
+  if (!doc) return;
+  const btn = els.shareDoc;
+  const orig = btn.textContent;
+  btn.textContent = "生成链接...";
+  btn.disabled = true;
+
+  const title = doc.title || "文档";
+  const isHtml = doc.type === "html";
+  const html = isHtml ? doc.content : documentHtml(doc);
+
+  // Step 1: create a share link on server
+  fetch("/api/share", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ title, html }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.url) throw new Error(data.error || "创建链接失败");
+    // Step 2: share the URL (synchronous from .then — user gesture may be lost)
+    // So we try share, but also show a copyable link as fallback
+    const shareUrl = data.url;
+    if (navigator.share) {
+      return navigator.share({ title, url: shareUrl }).then(() => {
+        btn.textContent = "已分享";
+      }).catch(e => {
+        if (e.name === "AbortError") return;
+        // Share failed — show copy dialog
+        showShareLink(shareUrl, title);
+        btn.textContent = "链接已生成";
+      });
+    } else {
+      showShareLink(shareUrl, title);
+      btn.textContent = "链接已生成";
+    }
+  })
+  .catch(e => {
+    console.log("[Share] Error:", e.message);
+    btn.textContent = "分享失败";
+  })
+  .finally(() => {
+    btn.disabled = false;
+    setTimeout(() => (btn.textContent = orig), 2000);
+  });
+}
+
+// Show a modal with the share link for manual copy
+function showShareLink(url, title) {
+  const existing = document.querySelector(".share-modal-overlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.className = "share-modal-overlay";
+  overlay.innerHTML = `
+    <div class="share-modal">
+      <h3>分享「${escapeHtml(title)}」</h3>
+      <p style="font-size:13px;color:var(--muted)">链接有效期 24 小时，打开即可查看排版文档</p>
+      <input type="text" class="share-link-input" value="${escapeHtml(url)}" readonly>
+      <div class="share-modal-actions">
+        <button class="share-copy-btn">复制链接</button>
+        <button class="share-close-btn">关闭</button>
+      </div>
+    </div>
+  `;
+  document.body.append(overlay);
+
+  const input = overlay.querySelector(".share-link-input");
+  overlay.querySelector(".share-copy-btn").addEventListener("click", () => {
+    input.select();
+    navigator.clipboard.writeText(url).then(() => {
+      overlay.querySelector(".share-copy-btn").textContent = "已复制";
+    });
+  });
+  overlay.querySelector(".share-close-btn").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  input.addEventListener("click", () => input.select());
 }
 
 function downloadCurrentDoc(format) {

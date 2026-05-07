@@ -92,6 +92,7 @@
 | Stop & Edit | ✅ | ✅ | ✅ |
 | Interactive Options | ✅ | ✅ | ❌ |
 | Follow-up Suggestions | ✅ | ✅ | ❌ |
+| 文档分享 | N/A | ✅ 临时链接 | ❌ |
 | Runs on 128MB VPS | N/A | ✅ | ❌ (needs 2GB+) |
 | MCP Support | ✅ | ❌ | ✅ |
 
@@ -238,6 +239,27 @@ ssh server 'cd /path/to/app && node server.mjs'
 - 全局异常捕获：uncaughtException + try-catch 防进程崩溃
 - 空 stopReason 推断：兼容上游 API 不返回 stop_reason 的情况
 - 图片上传修复：Canvas 压缩 + HEIC 格式支持 + 错误提示
+
+---
+
+### 2026-05-08 — 分享功能 & 移动端文档入口 & 文档同步修复
+
+**分享功能：**
+- 文档面板新增"分享"按钮（移动端可见）
+- 服务端临时链接方案：生成 24h 有效的 `/s/:id` 链接
+- 对方打开链接即可查看排版好的 HTML 文档
+- 尝试 navigator.share 调起系统分享面板 → 降级弹出可复制链接弹窗
+
+**移动端文档入口：**
+- 聊天界面右下角新增浮动文档按钮（FAB）
+- 显示当前对话最新文档标题，点击直接打开文档面板
+- 关闭面板后 FAB 自动恢复
+
+**Bug 修复：**
+- 修复下载文档后文档丢失（visibilitychange 触发刷新覆盖本地文档）
+- 文档同步改为合并策略：保留本地独有文档 + 按内容长度择优
+- 修复源码视图亮色主题下文字不可见（CSS 特异性 bug）
+- visibilitychange 加 5 秒冷却，防止下载对话框触发重复刷新
 
 ---
 

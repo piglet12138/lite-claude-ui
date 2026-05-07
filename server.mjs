@@ -12,6 +12,15 @@ const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
+
+// Temporary share links (in-memory, expire after 24h)
+const shareStore = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, entry] of shareStore) {
+    if (now > entry.expires) shareStore.delete(id);
+  }
+}, 3600_000);
 const env = await loadEnv(path.join(root, ".env"));
 const port = Number(env.PORT || process.env.PORT || 3040);
 const baseUrl = process.env.LUCKY_BASE_URL || env.LUCKY_BASE_URL || "https://luckyapi.chat/v1";
@@ -449,6 +458,36 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req, 32 * 1024);
       const results = await multiSearch(body?.query);
       return json(res, { results });
+    }
+
+    // ── Share: create temporary link ──
+    if (req.method === "POST" && url.pathname === "/api/share") {
+      if (!readSession(req)) return json(res, { error: "Unauthorized" }, 401);
+      const body = await readJson(req);
+      const title = String(body?.title || "文档").slice(0, 200);
+      const html = String(body?.html || "").slice(0, 2_000_000);
+      if (!html) return json(res, { error: "No content" }, 400);
+      const id = crypto.randomBytes(8).toString("hex");
+      shareStore.set(id, { title, html, expires: Date.now() + 24 * 3600_000 });
+      const shareUrl = `https://${req.headers.host || "claude.yaoyuheng2001.me"}/s/${id}`;
+      return json(res, { url: shareUrl, id });
+    }
+
+    // ── Share: view shared document ──
+    if (req.method === "GET" && url.pathname.startsWith("/s/")) {
+      const id = url.pathname.slice(3);
+      const entry = shareStore.get(id);
+      if (!entry) {
+        res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
+        res.end("<html><body style='font-family:system-ui;padding:40px;text-align:center'><h2>链接已过期</h2><p>分享链接有效期为 24 小时</p></body></html>");
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      res.end(entry.html);
+      return;
     }
 
     // ── Export as DOCX ──
