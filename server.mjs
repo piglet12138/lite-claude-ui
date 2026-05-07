@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
+import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport } from "./db.mjs";
 const XLSX = require("xlsx");
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType, BorderStyle, PageBreak } = require("docx");
 
@@ -20,6 +21,10 @@ const accessEmail = process.env.ACCESS_EMAIL || env.ACCESS_EMAIL || "i@i.io";
 const accessPassword = process.env.ACCESS_PASSWORD || env.ACCESS_PASSWORD || "iiiiiiii";
 const sessionSecret = process.env.SESSION_SECRET || env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 const braveApiKey = process.env.BRAVE_SEARCH_API_KEY || env.BRAVE_SEARCH_API_KEY;
+const serperApiKey = process.env.SERPER_API_KEY || env.SERPER_API_KEY || "";
+const tavilyApiKey = process.env.TAVILY_API_KEY || env.TAVILY_API_KEY || "";
+const googleCseApiKey = process.env.GOOGLE_CSE_API_KEY || env.GOOGLE_CSE_API_KEY || "";
+const googleCseCx = process.env.GOOGLE_CSE_CX || env.GOOGLE_CSE_CX || "";
 const webSearchEnabled = /^(true|1|yes)$/i.test(process.env.ENABLE_WEB_SEARCH || env.ENABLE_WEB_SEARCH || "false");
 const webSearchCount = Math.max(1, Math.min(5, Number(process.env.WEB_SEARCH_RESULT_COUNT || env.WEB_SEARCH_RESULT_COUNT || 3)));
 const webSearchQueryCount = Math.max(1, Math.min(3, Number(process.env.WEB_SEARCH_QUERY_COUNT || env.WEB_SEARCH_QUERY_COUNT || 2)));
@@ -53,7 +58,7 @@ const agenticSystemPrompt = [
 const anthropicTools = [
   {
     name: "web_search",
-    description: "Search the web using Brave Search for current/recent information, facts, prices, news, weather, or anything that benefits from real-time data. Can be called multiple times with different queries.",
+    description: "Search the web for current information, facts, data, news. Supports Chinese and English. Tips: (1) Use specific keywords, not full sentences. (2) For Chinese topics, search in Chinese. (3) Call multiple times with different angles for comprehensive research. (4) After searching, the system auto-reads top results for full content.",
     input_schema: {
       type: "object",
       properties: {
@@ -137,37 +142,22 @@ if (!apiKey) {
 }
 
 // ---------------------------------------------------------------------------
-// User management (JSON file based)
+// User management (SQLite)
 // ---------------------------------------------------------------------------
-const usersFile = path.join(root, "users.json");
-const sessions = new Map(); // token -> { userId, email, role, exp }
 const loginAttempts = new Map(); // ip -> { count, resetAt }
-
-async function loadUsers() {
-  try { return JSON.parse(await fs.readFile(usersFile, "utf8")); } catch { return []; }
-}
-
-async function saveUsers(users) {
-  await fs.writeFile(usersFile, JSON.stringify(users, null, 2), "utf8");
-}
 
 function hashPwd(password, salt) {
   return crypto.createHash("sha256").update(password + salt).digest("hex");
 }
 
-async function seedAdmin() {
-  const users = await loadUsers();
+function seedAdmin() {
+  const existing = dbUsers.getByEmail(accessEmail);
+  if (existing) return;
+  // Also check if any users exist at all
+  const users = dbUsers.list();
   if (users.length) return;
   const salt = crypto.randomBytes(16).toString("hex");
-  users.push({
-    id: crypto.randomUUID(),
-    email: accessEmail,
-    passwordHash: hashPwd(accessPassword, salt),
-    salt,
-    role: "admin",
-    createdAt: new Date().toISOString(),
-  });
-  await saveUsers(users);
+  dbUsers.create(crypto.randomUUID(), accessEmail, hashPwd(accessPassword, salt), salt, "admin");
 }
 seedAdmin();
 
@@ -198,12 +188,10 @@ const server = http.createServer(async (req, res) => {
       const password = String(body?.password || "");
       if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, { error: "邮箱格式不正确" }, 400);
       if (password.length < 6) return json(res, { error: "密码至少 6 位" }, 400);
-      const users = await loadUsers();
-      if (users.find((u) => u.email === email)) return json(res, { error: "该邮箱已注册" }, 409);
+      if (dbUsers.getByEmail(email)) return json(res, { error: "该邮箱已注册" }, 409);
       const salt = crypto.randomBytes(16).toString("hex");
-      const user = { id: crypto.randomUUID(), email, passwordHash: hashPwd(password, salt), salt, role: "user", createdAt: new Date().toISOString() };
-      users.push(user);
-      await saveUsers(users);
+      const user = { id: crypto.randomUUID(), email, passwordHash: hashPwd(password, salt), salt, role: "user" };
+      dbUsers.create(user.id, email, user.passwordHash, salt, "user");
       const token = createSession(user);
       res.setHeader("Set-Cookie", `claude_lite=${token}; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=604800`);
       return json(res, { ok: true, email: user.email });
@@ -215,9 +203,8 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req, 32 * 1024);
       const email = String(body?.email || "").trim().toLowerCase();
       const password = String(body?.password || "");
-      const users = await loadUsers();
-      const user = users.find((u) => u.email === email);
-      if (!user || hashPwd(password, user.salt) !== user.passwordHash) {
+      const user = dbUsers.getByEmail(email);
+      if (!user || hashPwd(password, user.salt) !== user.password_hash) {
         recordAttempt(ip);
         return json(res, { error: "账号或密码不正确" }, 401);
       }
@@ -228,7 +215,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/logout") {
       const session = readSession(req);
-      if (session) sessions.delete(getCookieToken(req));
+      if (session) dbSessions.delete(getCookieToken(req));
       res.setHeader("Set-Cookie", "claude_lite=; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=0");
       return json(res, { ok: true });
     }
@@ -236,11 +223,134 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/admin/users") {
       const session = readSession(req);
       if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
-      const users = await loadUsers();
-      return json(res, users.map((u) => ({ id: u.id, email: u.email, role: u.role, createdAt: u.createdAt })));
+      return json(res, dbUsers.list());
     }
 
-    if (req.method === "POST" && url.pathname === "/api/bug-report") {
+    // =========================================================================
+    // Thread / Message / Document API (SQLite-backed)
+    // =========================================================================
+
+    if (req.method === "GET" && url.pathname === "/api/threads") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const threads = dbThreads.list(session.userId);
+      return json(res, threads);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/threads") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const body = await readJson(req, 64 * 1024);
+      const id = body.id || crypto.randomUUID();
+      dbThreads.create(id, session.userId, body.title || "新对话", body.archived ? 1 : 0, body.createdAt, body.updatedAt);
+      return json(res, { ok: true, id });
+    }
+
+    if (req.method === "PATCH" && url.pathname.startsWith("/api/threads/") && !url.pathname.includes("/messages") && !url.pathname.includes("/documents")) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const threadId = url.pathname.split("/")[3];
+      const body = await readJson(req, 32 * 1024);
+      const existing = dbThreads.get(threadId, session.userId);
+      if (!existing) return json(res, { error: "Not found" }, 404);
+      dbThreads.update(threadId, session.userId, body.title ?? existing.title, body.archived ?? existing.archived);
+      return json(res, { ok: true });
+    }
+
+    if (req.method === "DELETE" && url.pathname.startsWith("/api/threads/") && !url.pathname.includes("/messages") && !url.pathname.includes("/documents")) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const threadId = url.pathname.split("/")[3];
+      dbThreads.delete(threadId, session.userId);
+      return json(res, { ok: true });
+    }
+
+    // Messages
+    if (req.method === "GET" && url.pathname.match(/^\/api\/threads\/[^/]+\/messages$/)) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const threadId = url.pathname.split("/")[3];
+      if (!dbThreads.get(threadId, session.userId)) return json(res, { error: "Not found" }, 404);
+      const messages = dbMessages.list(threadId);
+      return json(res, messages);
+    }
+
+    if (req.method === "POST" && url.pathname.match(/^\/api\/threads\/[^/]+\/messages$/)) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const threadId = url.pathname.split("/")[3];
+      if (!dbThreads.get(threadId, session.userId)) return json(res, { error: "Not found" }, 404);
+      const body = await readJson(req, 512 * 1024);
+      if (Array.isArray(body)) {
+        dbMessages.appendBatch(threadId, body);
+      } else {
+        dbMessages.append(threadId, body);
+      }
+      // Touch thread updated_at
+      const t = dbThreads.get(threadId, session.userId);
+      if (t) dbThreads.update(threadId, session.userId, t.title, t.archived);
+      return json(res, { ok: true });
+    }
+
+    if (req.method === "DELETE" && url.pathname.match(/^\/api\/threads\/[^/]+\/messages$/)) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const threadId = url.pathname.split("/")[3];
+      if (!dbThreads.get(threadId, session.userId)) return json(res, { error: "Not found" }, 404);
+      const param = url.searchParams.get("action");
+      if (param === "deleteLast") {
+        dbMessages.deleteLast(threadId);
+      } else {
+        dbMessages.clearThread(threadId);
+      }
+      return json(res, { ok: true });
+    }
+
+    // Documents
+    if (req.method === "GET" && url.pathname.match(/^\/api\/threads\/[^/]+\/documents$/)) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const threadId = url.pathname.split("/")[3];
+      if (!dbThreads.get(threadId, session.userId)) return json(res, { error: "Not found" }, 404);
+      return json(res, dbDocuments.list(threadId));
+    }
+
+    if (req.method === "POST" && url.pathname.match(/^\/api\/threads\/[^/]+\/documents$/)) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const threadId = url.pathname.split("/")[3];
+      if (!dbThreads.get(threadId, session.userId)) return json(res, { error: "Not found" }, 404);
+      const doc = await readJson(req, 2 * 1024 * 1024);
+      doc.id = doc.id || crypto.randomUUID();
+      dbDocuments.upsert(threadId, doc);
+      return json(res, { ok: true, id: doc.id });
+    }
+
+    if (req.method === "DELETE" && url.pathname.match(/^\/api\/documents\/[^/]+$/)) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const docId = url.pathname.split("/")[3];
+      dbDocuments.delete(docId);
+      return json(res, { ok: true });
+    }
+
+    // Bulk import (migration from localStorage)
+    if (req.method === "POST" && url.pathname === "/api/migrate") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const body = await readJson(req, 50 * 1024 * 1024); // up to 50MB
+      const threads = Array.isArray(body.threads) ? body.threads : [];
+      if (!threads.length) return json(res, { ok: true, imported: 0 });
+      // Skip threads that already exist
+      const existing = new Set(dbThreads.list(session.userId).map(t => t.id));
+      const newThreads = threads.filter(t => !existing.has(t.id));
+      if (newThreads.length) {
+        dbBulkImport(session.userId, newThreads);
+      }
+      return json(res, { ok: true, imported: newThreads.length, skipped: threads.length - newThreads.length });
+    }
+
+        if (req.method === "POST" && url.pathname === "/api/bug-report") {
       const session = readSession(req);
       if (!session) return json(res, { error: "Unauthorized" }, 401);
       const body = await readJson(req, 64 * 1024);
@@ -291,7 +401,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/search") {
       if (!readSession(req)) return json(res, { error: "Unauthorized" }, 401);
       const body = await readJson(req, 32 * 1024);
-      return json(res, { results: await braveSearch(body?.query) });
+      const results = await multiSearch(body?.query);
+      return json(res, { results });
     }
 
     // ── Export as DOCX ──
@@ -477,7 +588,7 @@ async function chat(req, res) {
       }
     }
   }
-  const temperature = Number.isFinite(body?.temperature) ? body.temperature : 0.42;
+  const temperature = Number.isFinite(body?.temperature) ? body.temperature : 0.7;
 
   // Convert frontend messages to Anthropic format
   const apiMessages = toAnthropicMessages(messages);
@@ -499,16 +610,16 @@ async function chat(req, res) {
   res.flushHeaders?.();
   res.write(": stream\n\n");
 
-  const MAX_ROUNDS = 5;
+  const MAX_ROUNDS = 8;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const isLastRound = round === MAX_ROUNDS - 1;
     // After first round, remove web_search to prevent context bloat; keep fetch_url, run_code, create_artifact
-    const roundTools = round === 0 ? tools : tools.filter((t) => t.name !== "web_search" && t.name !== "fetch_url");
+    const roundTools = round < 3 ? tools : tools.filter((t) => t.name !== "web_search" && t.name !== "fetch_url");
 
     const upstreamBody = {
       model,
-      max_tokens: 16384,
+      max_tokens: 32768,
       stream: true,
       temperature,
       system: agenticSystemPrompt,
@@ -533,7 +644,7 @@ async function chat(req, res) {
         await delay(1500);
         const compressedMessages = round === 0 ? apiMessages : compressMessages(apiMessages);
         const retryBody = {
-          model, max_tokens: 16384, stream: true, temperature,
+          model, max_tokens: 32768, stream: true, temperature,
           system: agenticSystemPrompt,
           messages: compressedMessages,
           tools: tools.length ? tools : undefined,
@@ -614,14 +725,14 @@ async function chat(req, res) {
           .map((t) => t.input?.title || "Artifact");
         apiMessages.pop(); // remove the verbose assistant content we just pushed
         apiMessages.push({ role: "assistant", content: `已创建文档：${artifactNames.join("、")}。` });
-        apiMessages.push({ role: "user", content: "好的，请继续完成剩余的请求。如果还需要创建其他文档，请继续使用 create_artifact 工具。" });
+        apiMessages.push({ role: "user", content: "文档已生成。如果还有其他需要补充说明的内容或建议，请简要说明。" });
       } else if (allSearches && toolResultBlocks.length) {
         const searchSummary = toolResultBlocks
           .map((b) => String(b.content || "").slice(0, 600))
           .filter(Boolean)
           .join("\n\n");
         apiMessages.push({ role: "assistant", content: `我搜索了相关信息，以下是搜索结果：\n\n${searchSummary}` });
-        apiMessages.push({ role: "user", content: "好的，请基于这些信息完成我的请求。如果需要创建文档，请使用 create_artifact 工具。" });
+        apiMessages.push({ role: "user", content: "好的，请基于这些搜索结果，给出深入、全面的回答。如果信息不够，可以继续搜索其他角度。如果需要创建完整文档，使用 create_artifact。回答要有深度和细节，不要过于简短。" });
       } else {
         apiMessages.push({ role: "user", content: toolResultBlocks });
       }
@@ -778,13 +889,39 @@ async function executeTool(name, args, res = null) {
     case "web_search": {
       const query = String(args?.query || "").trim();
       if (!query) return { summary: "空查询", content: "No query provided.", sources: [] };
-      const results = await braveSearch(query);
+
+      // Smart multi-engine search with fallback chain
+      const results = await multiSearch(query);
       if (!results.length) return { summary: "无结果", content: `No search results found for: ${query}`, sources: [] };
+
+      // Auto-fetch top 2-3 results for full content
+      const fetchable = results.filter(r => r.url && r.url.startsWith("http"));
+      const fetchCount = Math.min(3, fetchable.length);
+      const fetchPromises = fetchable.slice(0, fetchCount).map(r =>
+        fetchPageText(r.url, 6000).catch(() => "")
+      );
+      const fullTexts = await Promise.all(fetchPromises);
+
+      // Build rich output
+      let fetchIdx = 0;
       const formatted = results
-        .map((r, i) => `[${i + 1}] ${r.title}${r.age ? ` (${r.age})` : ""}\nURL: ${r.url}\n${r.description}`)
+        .map((r, i) => {
+          let entry = `[${i + 1}] ${r.title}${r.age ? ` (${r.age})` : ""}`;
+          if (r.url) entry += `\nURL: ${r.url}`;
+          entry += `\n${r.description}`;
+          if (r.url && fetchIdx < fetchCount && fetchable[fetchIdx]?.url === r.url) {
+            if (fullTexts[fetchIdx]) {
+              entry += `\n--- 页面内容 ---\n${fullTexts[fetchIdx]}`;
+            }
+            fetchIdx++;
+          }
+          return entry;
+        })
         .join("\n\n");
-      const sources = results.map((r) => ({ title: r.title, url: r.url, snippet: r.description.slice(0, 180) }));
-      return { summary: `${results.length} 条结果`, content: formatted.slice(0, 3000), sources };
+
+      const sources = results.filter(r => r.url).map((r) => ({ title: r.title, url: r.url, snippet: r.description.slice(0, 180) }));
+      const fetchedCount = fullTexts.filter(Boolean).length;
+      return { summary: `${results.length} 条结果${fetchedCount ? ` (已读取 ${fetchedCount} 篇全文)` : ""}`, content: formatted.slice(0, 15000), sources };
     }
     case "fetch_url": {
       const url = String(args?.url || "").trim();
@@ -793,14 +930,18 @@ async function executeTool(name, args, res = null) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 10000);
         const resp = await fetch(url, {
-          headers: { "user-agent": "Mozilla/5.0 (compatible; ClaudeLite/1.0)" },
+          headers: {
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
+          "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        },
           signal: controller.signal,
           redirect: "follow",
         });
         clearTimeout(timeout);
         if (!resp.ok) return { summary: `HTTP ${resp.status}`, content: `Failed to fetch: HTTP ${resp.status}` };
         const html = await resp.text();
-        const text = extractTextFromHtml(html).slice(0, 6000);
+        const text = extractTextFromHtml(html).slice(0, 12000);
         const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "").trim().slice(0, 100);
         return { summary: title || url.slice(0, 40), content: `[${title || url}]\n\n${text}` };
       } catch (e) {
@@ -893,19 +1034,301 @@ function toolDisplayArgs(name, args) {
   return {};
 }
 
+// ---------------------------------------------------------------------------
+// Multi-engine search functions
+// ---------------------------------------------------------------------------
+
+// Serper.dev — Google results, fastest, best quality
+async function serperSearch(query) {
+  if (!serperApiKey) return [];
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const hasChinese = /[\u4e00-\u9fff]/.test(query);
+    const resp = await fetch("https://google.serper.dev/search", {
+      method: "POST",
+      headers: {
+        "X-API-KEY": serperApiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        q: query,
+        num: 10,
+        ...(hasChinese ? { gl: "cn", hl: "zh-cn" } : {}),
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      console.log(`[Serper] Error ${resp.status}: ${errText.slice(0, 100)}`);
+      return [];
+    }
+    const data = await resp.json();
+    const organic = (data.organic || []).slice(0, 8).map(item => ({
+      title: item.title || "",
+      url: item.link || "",
+      description: (item.snippet || "").slice(0, 800),
+      age: item.date || "",
+    }));
+    // Also include knowledge graph if present
+    const kg = data.knowledgeGraph;
+    if (kg?.description) {
+      organic.unshift({
+        title: kg.title || query,
+        url: kg.website || "",
+        description: `${kg.description} ${kg.attributes ? Object.entries(kg.attributes).map(([k,v]) => `${k}: ${v}`).join("; ") : ""}`.slice(0, 800),
+        age: "",
+      });
+    }
+    console.log(`[Serper] ${organic.length} results for: ${query.slice(0, 40)}`);
+    return organic;
+  } catch (e) {
+    console.log(`[Serper] Failed: ${e.message}`);
+    return [];
+  }
+}
+
+// Tavily — AI-optimized search, good summaries
+async function tavilySearch(query) {
+  if (!tavilyApiKey) return [];
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const resp = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: tavilyApiKey,
+        query: query,
+        search_depth: "basic",
+        max_results: 8,
+        include_answer: true,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      console.log(`[Tavily] Error ${resp.status}: ${errText.slice(0, 100)}`);
+      return [];
+    }
+    const data = await resp.json();
+    const results = (data.results || []).map(item => ({
+      title: item.title || "",
+      url: item.url || "",
+      description: (item.content || "").slice(0, 800),
+      age: "",
+    }));
+    // Tavily provides a direct answer — prepend it as a synthetic result
+    if (data.answer) {
+      results.unshift({
+        title: "AI 摘要",
+        url: "",
+        description: data.answer.slice(0, 1000),
+        age: "",
+      });
+    }
+    console.log(`[Tavily] ${results.length} results for: ${query.slice(0, 40)}`);
+    return results;
+  } catch (e) {
+    console.log(`[Tavily] Failed: ${e.message}`);
+    return [];
+  }
+}
+
+// Google Custom Search Engine
+async function googleCseSearch(query) {
+  if (!googleCseApiKey || !googleCseCx) return [];
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const hasChinese = /[\u4e00-\u9fff]/.test(query);
+    const url = new URL("https://www.googleapis.com/customsearch/v1");
+    url.searchParams.set("key", googleCseApiKey);
+    url.searchParams.set("cx", googleCseCx);
+    url.searchParams.set("q", query);
+    url.searchParams.set("num", "8");
+    if (hasChinese) {
+      url.searchParams.set("lr", "lang_zh-CN|lang_zh-TW");
+    }
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      console.log(`[GoogleCSE] Error ${resp.status}: ${errText.slice(0, 100)}`);
+      return [];
+    }
+    const data = await resp.json();
+    const results = (data.items || []).map(item => ({
+      title: item.title || "",
+      url: item.link || "",
+      description: (item.snippet || "").replace(/\n/g, " ").slice(0, 800),
+      age: "",
+    }));
+    console.log(`[GoogleCSE] ${results.length} results for: ${query.slice(0, 40)}`);
+    return results;
+  } catch (e) {
+    console.log(`[GoogleCSE] Failed: ${e.message}`);
+    return [];
+  }
+}
+
+// Smart multi-engine search with fallback chain
+async function multiSearch(query) {
+  const q = String(query || "").trim().slice(0, 300);
+  if (!q) return [];
+
+  // Try engines in priority order, stop when we have enough results
+  let results = [];
+  const usedEngines = [];
+
+  // 1. Serper first (Google results, best quality)
+  if (serperApiKey) {
+    results = await serperSearch(q);
+    if (results.length) usedEngines.push("Serper");
+  }
+
+  // 2. If Serper insufficient, try Tavily
+  if (results.length < 3 && tavilyApiKey) {
+    const tavilyResults = await tavilySearch(q);
+    if (tavilyResults.length) {
+      usedEngines.push("Tavily");
+      results = mergeResults(results, tavilyResults);
+    }
+  }
+
+  // 3. If still insufficient, try Google CSE
+  if (results.length < 3 && googleCseApiKey) {
+    const gResults = await googleCseSearch(q);
+    if (gResults.length) {
+      usedEngines.push("GoogleCSE");
+      results = mergeResults(results, gResults);
+    }
+  }
+
+  // 4. Brave as further fallback
+  if (results.length < 3 && braveApiKey) {
+    const braveResults = await braveSearch(q);
+    if (braveResults.length) {
+      usedEngines.push("Brave");
+      results = mergeResults(results, braveResults);
+    }
+  }
+
+  // 5. DuckDuckGo as last resort
+  if (results.length < 3) {
+    const ddgResults = await duckDuckGoSearch(q).catch(() => []);
+    if (ddgResults.length) {
+      usedEngines.push("DDG");
+      results = mergeResults(results, ddgResults);
+    }
+  }
+
+  console.log(`[Search] "${q.slice(0, 30)}" → ${results.length} results via [${usedEngines.join(" → ")}]`);
+  return results.slice(0, 10);
+}
+
+// Merge results, deduplicate by URL
+function mergeResults(existing, incoming) {
+  const urls = new Set(existing.map(r => r.url).filter(Boolean));
+  const merged = [...existing];
+  for (const r of incoming) {
+    if (!r.url || urls.has(r.url)) continue;
+    urls.add(r.url);
+    merged.push(r);
+  }
+  return merged;
+}
+
+// Fetch page text (lightweight, for auto-fetch after search)
+async function fetchPageText(url, maxLen = 6000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "accept": "text/html,application/xhtml+xml",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+      },
+      signal: controller.signal,
+      redirect: "follow",
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) return "";
+    const contentType = resp.headers.get("content-type") || "";
+    if (!contentType.includes("html") && !contentType.includes("text")) return "";
+    const html = await resp.text();
+    return extractTextFromHtml(html).slice(0, maxLen);
+  } catch {
+    clearTimeout(timeout);
+    return "";
+  }
+}
+
+// DuckDuckGo HTML search (no API key needed, better Chinese coverage than Brave)
+async function duckDuckGoSearch(query) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const resp = await fetch(url, {
+      headers: {
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) return [];
+    const html = await resp.text();
+
+    // Parse DDG HTML results
+    const results = [];
+    // Match result links and snippets
+    const linkRegex = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gs;
+    const snippetRegex = /<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/gs;
+    const links = [...html.matchAll(linkRegex)];
+    const snippets = [...html.matchAll(snippetRegex)];
+
+    for (let i = 0; i < Math.min(links.length, 8); i++) {
+      const rawUrl = links[i][1];
+      // DDG wraps URLs in a redirect
+      let actualUrl = rawUrl;
+      try {
+        const decoded = decodeURIComponent(rawUrl);
+        const uddgMatch = decoded.match(/uddg=([^&]+)/);
+        if (uddgMatch) actualUrl = decodeURIComponent(uddgMatch[1]);
+      } catch {}
+      if (!actualUrl.startsWith("http")) continue;
+      if (actualUrl.includes("duckduckgo.com/y.js")) continue; // skip ads
+      results.push({
+        title: stripTags(links[i][2]).trim(),
+        url: actualUrl,
+        description: snippets[i] ? stripTags(snippets[i][1]).trim().slice(0, 600) : "",
+        age: "",
+      });
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
 async function braveSearch(query) {
   const q = String(query || "").trim().slice(0, 300);
   if (!q) return [];
   const hasChinese = /[\u4e00-\u9fff]/.test(q);
   const url = new URL("https://api.search.brave.com/res/v1/web/search");
   url.searchParams.set("q", q);
-  url.searchParams.set("count", "8");
+  url.searchParams.set("count", "12");
   url.searchParams.set("text_decorations", "false");
   url.searchParams.set("safesearch", "moderate");
   url.searchParams.set("result_filter", "web,news");
   if (hasChinese) {
-    url.searchParams.set("search_lang", "zh-cn");
-    url.searchParams.set("country", "cn");
+    url.searchParams.set("search_lang", "zh");
+    // Note: do NOT set country=cn, it breaks Brave results for Chinese queries
   }
 
   const response = await fetch(url, {
@@ -919,19 +1342,19 @@ async function braveSearch(query) {
   const data = await response.json();
 
   // Merge web results and news results for richer content
-  const webResults = (data.web?.results || []).slice(0, 6).map((item) => ({
+  const webResults = (data.web?.results || []).slice(0, 8).map((item) => ({
     title: stripTags(item.title || ""),
     url: item.url || "",
     description: stripTags(
       [item.description || "", ...(item.extra_snippets || [])].join(" ").trim()
-    ).slice(0, 500),
+    ).slice(0, 800),
     age: item.age || "",
   }));
 
   const newsResults = (data.news?.results || []).slice(0, 4).map((item) => ({
     title: stripTags(item.title || ""),
     url: item.url || "",
-    description: stripTags(item.description || "").slice(0, 500),
+    description: stripTags(item.description || "").slice(0, 800),
     age: item.age || "",
   }));
 
@@ -943,7 +1366,7 @@ async function braveSearch(query) {
     seen.add(r.url);
     merged.push(r);
   }
-  return merged.slice(0, 6);
+  return merged.slice(0, 8);
 }
 
 function extractTextFromHtml(html) {
@@ -1117,7 +1540,8 @@ async function staticFile(requestPath, res) {
 
 function createSession(user) {
   const token = crypto.randomBytes(32).toString("hex");
-  sessions.set(token, { userId: user.id, email: user.email, role: user.role, exp: Date.now() + 7 * 86400_000 });
+  const expiresAt = Date.now() + 7 * 86400_000;
+  dbSessions.create(token, user.id, user.email, user.role || "user", expiresAt);
   return token;
 }
 
@@ -1129,10 +1553,9 @@ function getCookieToken(req) {
 function readSession(req) {
   const token = getCookieToken(req);
   if (!token) return null;
-  const session = sessions.get(token);
+  const session = dbSessions.get(token);
   if (!session) return null;
-  if (session.exp < Date.now()) { sessions.delete(token); return null; }
-  return session;
+  return { userId: session.user_id, email: session.email, role: session.role };
 }
 
 function isRateLimited(ip) {
@@ -1150,8 +1573,8 @@ function recordAttempt(ip) {
 
 // Cleanup expired sessions every hour
 setInterval(() => {
+  dbSessions.cleanup();
   const now = Date.now();
-  for (const [token, session] of sessions) { if (session.exp < now) sessions.delete(token); }
   for (const [ip, record] of loginAttempts) { if (record.resetAt < now) loginAttempts.delete(ip); }
 }, 3600_000);
 

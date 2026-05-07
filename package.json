@@ -8,6 +8,7 @@
     "check": "node --check server.mjs && node --check public/app.js && node --check src/worker.js"
   },
   "dependencies": {
+    "better-sqlite3": "^12.9.0",
     "docx": "^9.6.1",
     "mammoth": "^1.12.0",
     "pdf-parse": "^1.1.1",

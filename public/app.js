@@ -81,6 +81,31 @@ async function init() {
   state.authenticated ? showChat() : showLogin();
 }
 
+// Mobile: handle virtual keyboard resize (iOS/Android)
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => {
+    // Adjust layout when keyboard appears/disappears
+    document.documentElement.style.setProperty('--vh', window.visualViewport.height + 'px');
+  });
+  document.documentElement.style.setProperty('--vh', window.visualViewport.height + 'px');
+}
+
+// Mobile: scroll to bottom when input is focused
+document.addEventListener('focusin', (e) => {
+  if (e.target === els.prompt) {
+    setTimeout(() => {
+      els.messages.scrollTop = els.messages.scrollHeight;
+    }, 300);
+  }
+});
+
+// Mobile: close sidebar on backdrop tap
+document.addEventListener('click', (e) => {
+  if (document.body.classList.contains('sidebar-open') && !e.target.closest('.sidebar') && !e.target.closest('.mobile-only')) {
+    document.body.classList.remove('sidebar-open');
+  }
+});
+
 function initTheme() {
   const saved = localStorage.getItem("claude-lite-theme");
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -273,26 +298,114 @@ function showLogin() {
   document.body.classList.remove("sidebar-open");
 }
 
-function showChat() {
+async function showChat() {
   els.loginView.classList.add("hidden");
   els.chatView.classList.remove("hidden");
+  // Load threads from server (SQLite)
+  try {
+    const serverThreads = await fetchJson("/api/threads");
+    if (serverThreads.length) {
+      // Merge: server is source of truth for metadata, keep local messages as cache
+      const localMap = new Map(state.threads.map(t => [t.id, t]));
+      state.threads = serverThreads.map(t => {
+        const local = localMap.get(t.id);
+        return {
+          id: t.id,
+          title: t.title,
+          archived: !!t.archived,
+          createdAt: t.created_at,
+          updatedAt: t.updated_at,
+          messages: local?.messages || [], // lazy-loaded
+          documents: local?.documents || [],
+          _loaded: local?._loaded || false,
+        };
+      });
+    }
+  } catch (e) {
+    console.warn("[Sync] Failed to load threads from server, using local cache:", e.message);
+  }
   if (!state.threads.length) createThread();
   state.activeId ||= state.threads[0].id;
   render();
+  // Load messages for active thread
+  await loadThreadData(state.activeId);
+  render();
+  // Migrate localStorage data to server (one-time)
+  await migrateLocalToServer();
   resumePendingGoogleUpload();
 }
 
 function createThread() {
-  const thread = { id: crypto.randomUUID(), title: "新对话", messages: [], documents: [], createdAt: Date.now() };
+  const thread = { id: crypto.randomUUID(), title: "新对话", messages: [], documents: [], createdAt: new Date().toISOString(), _loaded: true };
   state.threads.unshift(thread);
   state.activeId = thread.id;
   state.activeDocId = "";
   saveThreads();
+  // Persist to server (fire-and-forget)
+  fetch("/api/threads", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: thread.id, title: thread.title }),
+  }).catch(() => {});
   return thread;
 }
 
 function activeThread() {
   return state.threads.find((thread) => thread.id === state.activeId) || createThread();
+}
+
+async function migrateLocalToServer() {
+  const MIGRATED_KEY = "claude-lite-migrated-to-sqlite";
+  if (localStorage.getItem(MIGRATED_KEY)) return;
+  // Check if we have local threads with messages that server doesn't have
+  const localThreads = state.threads.filter(t => t.messages && t.messages.length > 0 && t._loaded !== false);
+  if (!localThreads.length) {
+    localStorage.setItem(MIGRATED_KEY, "1");
+    return;
+  }
+  try {
+    const resp = await fetch("/api/migrate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ threads: localThreads }),
+    });
+    const result = await resp.json();
+    console.log("[Migration]", result);
+    localStorage.setItem(MIGRATED_KEY, "1");
+  } catch (e) {
+    console.warn("[Migration] Failed:", e.message);
+  }
+}
+
+async function loadThreadData(threadId) {
+  const thread = state.threads.find(t => t.id === threadId);
+  if (!thread || thread._loaded) return;
+  try {
+    const [messages, documents] = await Promise.all([
+      fetchJson("/api/threads/" + threadId + "/messages"),
+      fetchJson("/api/threads/" + threadId + "/documents"),
+    ]);
+    thread.messages = messages.map(m => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      toolCalls: m.toolCalls,
+    }));
+    thread.documents = documents.map(d => ({
+      id: d.id,
+      title: d.title,
+      type: d.type,
+      content: d.content,
+      language: d.language,
+      description: d.description,
+      versions: d.versions || [],
+    }));
+    thread._loaded = true;
+    saveThreads(); // cache locally
+    render();
+  } catch (e) {
+    console.warn("[Sync] Failed to load thread data:", e.message);
+  }
 }
 
 function activeDocument() {
@@ -370,7 +483,7 @@ function renderThreads() {
         restore.className = "thread-more-btn";
         restore.title = "恢复";
         restore.textContent = "↩";
-        restore.addEventListener("click", (e) => { e.stopPropagation(); thread.archived = false; saveThreads(); render(); });
+        restore.addEventListener("click", (e) => { e.stopPropagation(); thread.archived = false; saveThreads(); syncThreadMeta(thread.id, { archived: false }); render(); });
         item.append(restore);
         item.addEventListener("click", () => { state.activeId = thread.id; render(); });
         els.threadList.append(item);
@@ -402,6 +515,7 @@ function showContextMenu(anchor, items) {
 }
 
 function deleteThread(id) {
+  fetch("/api/threads/" + id, { method: "DELETE" }).catch(() => {});
   if (!confirm("确定删除这个对话？")) return;
   state.threads = state.threads.filter((t) => t.id !== id);
   if (state.activeId === id) {
@@ -418,6 +532,7 @@ function renameThread(id) {
   const name = prompt("重命名对话：", thread.title || "");
   if (name === null) return;
   thread.title = name.trim() || "新对话";
+  syncThreadMeta(thread.id, { title: thread.title });
   saveThreads();
   renderThreads();
 }
@@ -1039,6 +1154,12 @@ async function send(event) {
     }
     saveThreads();
     saveDocuments();
+    // Sync to server: last 2 messages (user + assistant)
+    const lastTwo = thread.messages.slice(-2);
+    syncMessages(thread.id, lastTwo);
+    syncThreadMeta(thread.id, { title: thread.title });
+    // Sync any new documents
+    for (const doc of (thread.documents || [])) syncDocument(thread.id, doc);
     render();
   }
 }
@@ -1623,10 +1744,42 @@ function loadJson(key, fallback) {
 
 function saveThreads() {
   try {
-    localStorage.setItem(THREADS_KEY, JSON.stringify(state.threads.slice(0, 30)));
+    // Save to localStorage as cache (strip large content for quota safety)
+    const toCache = state.threads.slice(0, 50).map(t => ({
+      ...t,
+      messages: (t.messages || []).slice(-30), // keep last 30 messages in cache
+    }));
+    localStorage.setItem(THREADS_KEY, JSON.stringify(toCache));
   } catch (e) {
-    console.warn("saveThreads failed (quota?):", e.message);
+    console.warn("saveThreads cache failed (quota?):", e.message);
   }
+}
+
+// Sync a message to server after it's appended
+function syncMessages(threadId, messages) {
+  fetch("/api/threads/" + threadId + "/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(messages),
+  }).catch(e => console.warn("[Sync] message sync failed:", e.message));
+}
+
+// Sync a document to server
+function syncDocument(threadId, doc) {
+  fetch("/api/threads/" + threadId + "/documents", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(doc),
+  }).catch(e => console.warn("[Sync] document sync failed:", e.message));
+}
+
+// Sync thread metadata (title, archived)
+function syncThreadMeta(threadId, updates) {
+  fetch("/api/threads/" + threadId, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(updates),
+  }).catch(e => console.warn("[Sync] thread meta sync failed:", e.message));
 }
 
 function saveDocuments() {

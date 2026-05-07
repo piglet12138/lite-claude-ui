@@ -139,7 +139,7 @@ button {
 
 .app-shell {
   display: grid;
-  height: 100dvh;
+  height: var(--vh, 100dvh);
   min-height: 0;
   grid-template-columns: 272px minmax(0, 1fr);
   background: var(--bg);
@@ -1800,7 +1800,10 @@ img.brand-logo.large {
   .doc-panel {
     position: fixed;
     z-index: 30;
-    inset: 60px 10px 12px;
+    inset: 52px 0 0;
+    border-radius: 0;
+    border: 0;
+    border-top: 1px solid var(--line);
     box-shadow: 0 -4px 40px rgba(0, 0, 0, 0.3);
   }
 }
@@ -1829,39 +1832,252 @@ img.brand-logo.large {
 @media (max-width: 720px) {
   .topbar {
     padding-inline: 10px;
+    min-height: 48px;
   }
 
   .ghost-button {
     display: none;
   }
 
+  .model-pill {
+    font-size: 12px;
+  }
+
   .chat-view {
-    padding: 0 8px max(10px, calc(env(safe-area-inset-bottom) + 8px));
+    padding: 0 6px max(8px, calc(env(safe-area-inset-bottom) + 6px));
   }
 
   .starter-grid {
     grid-template-columns: 1fr;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .starter {
+    min-height: 56px;
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+
+  .hero h1 {
+    font-size: 28px;
+  }
+
+  .hero p {
+    font-size: 13px;
+    padding-inline: 8px;
   }
 
   .messages {
-    padding-inline: 4px;
+    padding-inline: 2px;
+  }
+
+  .message {
+    width: 100%;
+  }
+
+  .message.user .message-bubble {
+    max-width: 88%;
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+
+  .message.assistant .message-bubble {
+    font-size: 14px;
   }
 
   .composer {
     width: 100%;
+    border-radius: 16px;
+  }
+
+  .composer textarea {
+    font-size: 16px; /* prevents iOS zoom on focus */
+    padding: 10px 12px 6px;
+    max-height: 120px;
   }
 
   .message.assistant {
-    grid-template-columns: 24px minmax(0, 1fr);
+    grid-template-columns: 22px minmax(0, 1fr);
     column-gap: 8px;
   }
 
   .message-avatar {
-    width: 22px;
-    height: 22px;
+    width: 20px;
+    height: 20px;
+  }
+
+  /* Tool cards */
+  .tool-card {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  /* Composer actions */
+  .composer-actions {
+    padding-top: 2px;
+  }
+
+  .send-button {
+    width: 36px;
+    height: 36px;
+  }
+
+  .tool-button,
+  .icon-button {
+    width: 36px;
+    min-height: 36px;
+  }
+
+  .text-tool {
+    min-width: 40px;
+    padding: 0 8px;
+  }
+
+  /* Attachment pills */
+  .attachment-pill {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+
+  /* Document panel: full-screen overlay on mobile */
+  .doc-panel {
+    position: fixed;
+    z-index: 30;
+    inset: 48px 0 0;
+    border-radius: 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .doc-panel-header {
+    min-height: 48px;
+    padding: 8px 12px;
+  }
+
+  .doc-actions button {
+    min-height: 34px;
+    min-width: 34px;
+    font-size: 12px;
+  }
+
+  /* Messages actions (copy/regen) always visible on mobile */
+  .message-actions {
+    opacity: 1;
+  }
+
+  .message-action {
+    min-height: 32px;
+    padding: 4px 8px;
+  }
+
+  /* Login view */
+  .login-card {
+    width: 92%;
+    padding: 24px 20px;
+  }
+
+  /* Thread context menu */
+  .context-menu {
+    min-width: 140px;
+  }
+
+  .context-menu button {
+    min-height: 40px;
+    font-size: 13px;
+  }
+
+  /* Code blocks */
+  .code-block-wrapper {
+    border-radius: 10px;
+    font-size: 12px;
+  }
+
+  /* Site footer */
+  .site-footer {
+    display: none;
   }
 }
 
+/* Extra small screens (iPhone SE, etc) */
+@media (max-width: 380px) {
+  .topbar {
+    padding-inline: 8px;
+  }
+
+  .chat-view {
+    padding: 0 4px max(6px, calc(env(safe-area-inset-bottom) + 4px));
+  }
+
+  .message.user .message-bubble {
+    max-width: 92%;
+    padding: 8px 12px;
+  }
+
+  .composer textarea {
+    padding: 8px 10px 4px;
+  }
+
+  .hero h1 {
+    font-size: 24px;
+  }
+
+  .starter {
+    min-height: 48px;
+    padding: 8px 12px;
+  }
+}
+
+
+
+/* ─── Touch & Mobile Enhancements ─── */
+@supports (padding: env(safe-area-inset-bottom)) {
+  .composer {
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+}
+
+/* Prevent pull-to-refresh on mobile */
+.messages {
+  overscroll-behavior: contain;
+}
+
+/* Smooth scrolling on iOS */
+.messages,
+.thread-list,
+.doc-preview-wrapper {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Tap highlight for interactive elements */
+@media (hover: none) and (pointer: coarse) {
+  .thread-item:active,
+  .primary-nav:active,
+  .starter:active {
+    background: rgba(128, 128, 128, 0.12);
+    transition: none;
+  }
+
+  .message-actions {
+    opacity: 1;
+  }
+
+  /* Larger touch targets */
+  .thread-item {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  .icon-button,
+  .tool-button {
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .context-menu button {
+    min-height: 44px;
+  }
+}
 
 /* ─── Long Document Generation ─── */
 .long-doc-btn {
