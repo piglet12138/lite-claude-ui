@@ -1198,7 +1198,7 @@ async function multiSearch(query) {
     }
   }
 
-  // 3. If still insufficient, try Google CSE
+  // 3. Google CSE (limited to configured sites, use as supplement not primary)
   if (results.length < 3 && googleCseApiKey) {
     const gResults = await googleCseSearch(q);
     if (gResults.length) {
