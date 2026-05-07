@@ -89,6 +89,9 @@
 | Day/Night Theme | ✅ | ✅ | ✅ |
 | SQLite Persistence | N/A | ✅ | ✅ (MongoDB) |
 | Mobile Optimized | ✅ | ✅ | ✅ |
+| Stop & Edit | ✅ | ✅ | ✅ |
+| Interactive Options | ✅ | ✅ | ❌ |
+| Follow-up Suggestions | ✅ | ✅ | ❌ |
 | Runs on 128MB VPS | N/A | ✅ | ❌ (needs 2GB+) |
 | MCP Support | ✅ | ❌ | ✅ |
 
@@ -141,7 +144,7 @@ npm start              # → http://localhost:3040
 │  server.mjs + db.mjs                                 │
 │                                                          │
 │  ┌─────────────────────────────────────────────────┐    │
-│  │  Agentic Loop (max 8 rounds)                     │    │
+│  │  Agentic Loop (max 8 rounds, token budget mgmt)                     │    │
 │  │                                                   │    │
 │  │  Tools:                                           │    │
 │  │  • web_search  (5-engine fallback + auto-fetch)           │    │
@@ -170,6 +173,9 @@ npm start              # → http://localhost:3040
 | SQLite + localStorage 双层 | 服务端持久 + 前端缓存加速首屏 |
 | 5 引擎 Fallback 搜索 | 最大化免费额度，保证可用性 |
 | 搜索后自动抓取全文 | 摘要不够深，全文才能支撑深度回答 |
+| Token 预算管理 (80K) | 主动压缩上下文，防止 API 400 错误 |
+| 搜后深读策略 | 限制每轮搜索次数，鼓励深入阅读而非广撒网 |
+| <<options>> 交互协议 | 系统提示定义结构化格式，前端解析渲染 |
 
 ---
 
@@ -210,6 +216,30 @@ ssh server 'cd /path/to/app && node server.mjs'
 ---
 
 ## 更新日志
+
+### 2026-05-07 — 交互增强 & Agentic 优化 & 稳定性修复
+
+**交互功能：**
+- 终止生成：流式输出时发送按钮变为红色停止按钮，可随时中断
+- 编辑消息：用户消息支持编辑，回退到该时间点重新对话
+- 采访/规划选项：AI 提出多选题，用户点选后自动提交（类似 claude.ai）
+- 建议后续问题：回答末尾显示 2-3 个可点击的追问建议
+- 刷新保持：流式生成中每 3 秒自动保存，刷新页面不丢失内容
+- 跨设备同步：切换标签页/设备时自动刷新对话
+
+**Agentic Loop 优化：**
+- 搜后深读策略：限制每轮 1-2 次搜索，鼓励深入阅读全文后再搜
+- Token 预算管理：80K token 预算，主动压缩早期轮次
+- 工具可用性分层：搜索(前3轮) → 深读(前5轮) → 生成(后续)
+- 未完成意图续接：检测到模型想创建文档但流断开时自动追加一轮
+- 搜索结果保留量提升：从 600 字→4000 字/条
+
+**稳定性修复：**
+- 全局异常捕获：uncaughtException + try-catch 防进程崩溃
+- 空 stopReason 推断：兼容上游 API 不返回 stop_reason 的情况
+- 图片上传修复：Canvas 压缩 + HEIC 格式支持 + 错误提示
+
+---
 
 ### 2026-05-07 — SQLite 存储 & 多引擎搜索 & 移动端优化
 

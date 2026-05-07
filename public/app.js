@@ -10,6 +10,7 @@ const state = {
   threads: loadJson(THREADS_KEY, []),
   attachments: [],
   streaming: false,
+  abortController: null,
   docOpen: false,
   docAutoOpenSuppressedThreadId: "",
   expectDocument: false,
@@ -136,7 +137,11 @@ function wireEvents() {
     createThread();
     render();
   });
-  els.composer.addEventListener("submit", send);
+  els.composer.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (state.streaming) { stopGeneration(); return; }
+    send(e);
+  });
   els.composer.addEventListener("paste", handlePaste);
   els.prompt.addEventListener("input", autosize);
   els.prompt.addEventListener("keydown", (event) => {
@@ -335,6 +340,50 @@ async function showChat() {
   resumePendingGoogleUpload();
 }
 
+// Save partial content if user leaves/refreshes during streaming
+window.addEventListener("beforeunload", () => {
+  if (state.streaming) {
+    try { saveThreads(); } catch {}
+  }
+});
+
+// Auto-refresh active thread when tab regains focus (cross-device sync)
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && !state.streaming) {
+    refreshActiveThread();
+  }
+});
+
+async function refreshActiveThread() {
+  if (!state.activeId || state.streaming) return;
+  try {
+    // Refresh thread list
+    const serverThreads = await fetchJson("/api/threads");
+    if (serverThreads.length) {
+      const localMap = new Map(state.threads.map(t => [t.id, t]));
+      state.threads = serverThreads.map(t => {
+        const local = localMap.get(t.id);
+        return {
+          id: t.id,
+          title: t.title,
+          archived: !!t.archived,
+          createdAt: t.created_at,
+          updatedAt: t.updated_at,
+          messages: local?.messages || [],
+          documents: local?.documents || [],
+          _loaded: local?._loaded || false,
+        };
+      });
+    }
+    // Force reload active thread messages from server
+    await loadThreadData(state.activeId, true);
+    saveThreads();
+    render();
+  } catch (e) {
+    console.warn("[Sync] refresh failed:", e.message);
+  }
+}
+
 function createThread() {
   const thread = { id: crypto.randomUUID(), title: "新对话", messages: [], documents: [], createdAt: new Date().toISOString(), _loaded: true };
   state.threads.unshift(thread);
@@ -377,20 +426,31 @@ async function migrateLocalToServer() {
   }
 }
 
-async function loadThreadData(threadId) {
+async function loadThreadData(threadId, forceReload) {
   const thread = state.threads.find(t => t.id === threadId);
-  if (!thread || thread._loaded) return;
+  if (!thread) return;
+  if (thread._loaded && !forceReload) return;
   try {
-    const [messages, documents] = await Promise.all([
+    const [serverMessages, documents] = await Promise.all([
       fetchJson("/api/threads/" + threadId + "/messages"),
       fetchJson("/api/threads/" + threadId + "/documents"),
     ]);
-    thread.messages = messages.map(m => ({
+    const mappedServer = serverMessages.map(m => ({
       id: m.id,
       role: m.role,
       content: m.content,
       toolCalls: m.toolCalls,
     }));
+    // Keep local messages if they have more content (e.g. partial streaming saved locally)
+    const localLen = (thread.messages || []).reduce((s, m) => s + (typeof m.content === "string" ? m.content.length : 0), 0);
+    const serverLen = mappedServer.reduce((s, m) => s + (typeof m.content === "string" ? m.content.length : 0), 0);
+    if (localLen > serverLen && thread.messages.length >= mappedServer.length) {
+      // Local has more content — keep it and sync to server
+      console.log("[Sync] Local messages have more content, keeping local and syncing up");
+      syncMessages(threadId, thread.messages);
+    } else {
+      thread.messages = mappedServer;
+    }
     thread.documents = documents.map(d => ({
       id: d.id,
       title: d.title,
@@ -459,6 +519,8 @@ function renderThreads() {
       state.docOpen = docs.length > 0 && state.docOpen;
       document.body.classList.remove("sidebar-open");
       render();
+      // Load/refresh from server for cross-device sync
+      loadThreadData(thread.id, true);
     });
     els.threadList.append(item);
   }
@@ -607,16 +669,26 @@ function renderMessages() {
         }
         body.append(toolsDiv);
       }
-      const content = displayAssistantMessage(message.content);
-      if (content.trim()) {
-        bubble.innerHTML = renderRichDocument(content, "chat");
+      const { clean: cleanContent, suggestions, options } = parseInteractive(displayAssistantMessage(message.content));
+      if (cleanContent.trim()) {
+        bubble.innerHTML = renderRichDocument(cleanContent, "chat");
         body.append(bubble);
       }
       body.append(renderMessageActions(message, isStreamingMessage));
+      // Show interactive elements on last assistant message (not during streaming)
+      const isLastMsg = message === thread.messages.at(-1);
+      if (isLastMsg && !isStreamingMessage) {
+        if (options) body.append(renderOptions(options));
+        if (suggestions.length) body.append(renderSuggestions(suggestions));
+      }
       wrapper.append(body);
     } else {
       bubble.innerHTML = renderUserMessage(message);
-      wrapper.append(bubble);
+      const userBody = document.createElement("div");
+      userBody.className = "message-body";
+      userBody.append(bubble);
+      userBody.append(renderMessageActions(message, false));
+      wrapper.append(userBody);
     }
     els.messages.append(wrapper);
   }
@@ -646,6 +718,162 @@ function renderUserMessage(message) {
   }
   if (text) parts.push(`<div class="message-text">${escapeHtml(text)}</div>`);
   return parts.join("") || "";
+}
+
+// Extract interactive options and suggested follow-ups from assistant message
+function parseInteractive(text) {
+  if (!text || typeof text !== "string") return { clean: text || "", suggestions: [], options: null };
+  let clean = text;
+  let suggestions = [];
+  let options = null;
+
+  // Parse <<options>> (supports single object or array of questions)
+  const optRegex = /<<options>>\s*\n?\s*([\[{][\s\S]*?[\]}])\s*\n?\s*<<\/options>>/;
+  const optMatch = clean.match(optRegex);
+  if (optMatch) {
+    clean = clean.replace(optRegex, "").trimEnd();
+    try {
+      const parsed = JSON.parse(optMatch[1]);
+      if (Array.isArray(parsed) && parsed.length && parsed[0].question) {
+        // Array of questions
+        options = parsed.filter(q => q.question && Array.isArray(q.choices) && q.choices.length);
+      } else if (parsed.question && Array.isArray(parsed.choices)) {
+        // Single question — wrap in array
+        options = [parsed];
+      }
+      if (options && !options.length) options = null;
+    } catch {}
+  }
+
+  // Parse <<suggestions>>
+  const sugRegex = /<<suggestions>>\s*\n?\s*(\[[\s\S]*?\])\s*\n?\s*<<\/suggestions>>/;
+  const sugMatch = clean.match(sugRegex);
+  if (sugMatch) {
+    clean = clean.replace(sugRegex, "").trimEnd();
+    try {
+      const arr = JSON.parse(sugMatch[1]);
+      if (Array.isArray(arr) && arr.every(s => typeof s === "string")) {
+        suggestions = arr.slice(0, 4);
+      }
+    } catch {}
+  }
+
+  return { clean, suggestions, options };
+}
+
+function renderOptions(questions) {
+  const container = document.createElement("div");
+  container.className = "options-card";
+
+  // Track selections for each question
+  const selections = new Array(questions.length).fill(null);
+
+  questions.forEach((q, qIdx) => {
+    const group = document.createElement("div");
+    group.className = "options-group";
+
+    const qLabel = document.createElement("div");
+    qLabel.className = "options-question";
+    qLabel.textContent = q.question;
+    group.append(qLabel);
+
+    const choicesDiv = document.createElement("div");
+    choicesDiv.className = "options-choices";
+
+    for (const choice of q.choices.slice(0, 5)) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "option-btn";
+      const label = document.createElement("span");
+      label.className = "option-label";
+      label.textContent = choice.label;
+      btn.append(label);
+      if (choice.desc) {
+        const desc = document.createElement("span");
+        desc.className = "option-desc";
+        desc.textContent = choice.desc;
+        btn.append(desc);
+      }
+      btn.addEventListener("click", () => {
+        if (state.streaming) return;
+        // Toggle selection
+        selections[qIdx] = choice.label;
+        // Visual feedback: mark selected
+        choicesDiv.querySelectorAll(".option-btn").forEach(b => b.classList.remove("selected"));
+        btn.classList.add("selected");
+        // Auto-submit when all questions answered
+        const answered = selections.filter(Boolean).length;
+        if (answered === questions.length) {
+          setTimeout(() => submitSelections(), 300);
+        }
+        // Update counter
+        updateSubmitHint();
+      });
+      choicesDiv.append(btn);
+    }
+    group.append(choicesDiv);
+    container.append(group);
+  });
+
+  // Submit bar
+  const footer = document.createElement("div");
+  footer.className = "options-footer";
+  const counter = document.createElement("span");
+  counter.className = "options-counter";
+  counter.textContent = "点击选项回答";
+  footer.append(counter);
+  const submitBtn = document.createElement("button");
+  submitBtn.type = "button";
+  submitBtn.className = "options-submit";
+  submitBtn.textContent = "提交";
+  submitBtn.disabled = true;
+  submitBtn.addEventListener("click", () => submitSelections());
+  footer.append(submitBtn);
+  container.append(footer);
+
+  function updateSubmitHint() {
+    const answered = selections.filter(Boolean).length;
+    counter.textContent = `已选 ${answered}/${questions.length}`;
+    submitBtn.disabled = answered === 0;
+  }
+
+  function submitSelections() {
+    if (state.streaming) return;
+    const parts = [];
+    questions.forEach((q, i) => {
+      if (selections[i]) parts.push(`${q.question} ${selections[i]}`);
+    });
+    if (!parts.length) return;
+    els.prompt.value = parts.join("；");
+    autosize();
+    container.remove();
+    document.querySelectorAll(".suggestions").forEach(el => el.remove());
+    send(new Event("submit"));
+  }
+
+  return container;
+}
+
+function renderSuggestions(suggestions) {
+  const container = document.createElement("div");
+  container.className = "suggestions";
+  for (const text of suggestions) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "suggestion-chip";
+    btn.textContent = text;
+    btn.addEventListener("click", () => {
+      if (state.streaming) return;
+      els.prompt.value = text;
+      autosize();
+      // Remove suggestion chips immediately
+      container.remove();
+      // Auto-send
+      send(new Event("submit"));
+    });
+    container.append(btn);
+  }
+  return container;
 }
 
 function renderMessageActions(message, isStreamingMessage) {
@@ -679,7 +907,36 @@ function renderMessageActions(message, isStreamingMessage) {
     regen.addEventListener("click", () => regenerateLastMessage());
     actions.append(regen);
   }
+  // Edit button for user messages
+  if (message.role === "user" && !state.streaming) {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "message-action";
+    edit.title = "编辑消息";
+    edit.innerHTML = '<span class="icon-edit" aria-hidden="true">✎</span><span>编辑</span>';
+    edit.addEventListener("click", () => editUserMessage(message));
+    actions.append(edit);
+  }
+
   return actions;
+}
+
+function editUserMessage(message) {
+  if (state.streaming) return;
+  const thread = activeThread();
+  const msgIndex = thread.messages.indexOf(message);
+  if (msgIndex < 0) return;
+
+  // Put message content back in the composer
+  const text = typeof message.content === "string" ? message.content : "";
+  els.prompt.value = text;
+  autosize();
+  els.prompt.focus();
+
+  // Remove this message and all subsequent messages
+  thread.messages.splice(msgIndex);
+  saveThreads();
+  render();
 }
 
 function regenerateLastMessage() {
@@ -693,7 +950,8 @@ function regenerateLastMessage() {
   // Re-trigger send with existing user message
   thread.messages.push({ role: "assistant", content: "", toolCalls: [] });
   state.streaming = true;
-  els.send.disabled = true;
+  state.abortController = new AbortController();
+  updateSendButton();
   saveThreads();
   render();
   // Re-fetch
@@ -704,6 +962,7 @@ function regenerateLastMessage() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ messages: messagesForApi(thread, apiContent) }),
+        signal: state.abortController.signal,
       });
       if (!response.ok || !response.body) throw new Error(await response.text());
       const reader = response.body.getReader();
@@ -737,10 +996,18 @@ function regenerateLastMessage() {
         }
       }
     } catch (error) {
-      thread.messages.at(-1).content ||= `请求失败：${String(error.message || error).slice(0, 500)}`;
+      if (error.name === "AbortError") {
+        const lastMsg = thread.messages.at(-1);
+        if (lastMsg?.role === "assistant" && !lastMsg.content) {
+          lastMsg.content = "（已停止生成）";
+        }
+      } else {
+        thread.messages.at(-1).content ||= `请求失败：${String(error.message || error).slice(0, 500)}`;
+      }
     } finally {
       state.streaming = false;
-      els.send.disabled = false;
+      state.abortController = null;
+      updateSendButton();
       const lastMsg = thread.messages.at(-1);
       if (lastMsg?.toolCalls) {
         for (const tc of lastMsg.toolCalls) {
@@ -901,12 +1168,20 @@ function renderSearchToggle() {
   els.webSearchToggle?.setAttribute("aria-pressed", String(state.webSearchEnabled));
 }
 
+let lastStreamSave = 0;
+
 function queueStreamRender(thread, assistant) {
   if (streamRenderQueued) return;
   streamRenderQueued = true;
   requestAnimationFrame(() => {
     streamRenderQueued = false;
     updateStreamingMessage(assistant);
+    // Throttled save: persist partial content every 3 seconds
+    const now = Date.now();
+    if (now - lastStreamSave > 3000) {
+      lastStreamSave = now;
+      try { saveThreads(); } catch {}
+    }
   });
 }
 
@@ -1070,8 +1345,28 @@ function setArtifactView(view) {
   renderDocumentPanel();
 }
 
+function updateSendButton() {
+  if (state.streaming) {
+    els.send.disabled = false;
+    els.send.classList.add("stop-mode");
+    els.send.setAttribute("aria-label", "停止生成");
+    els.send.innerHTML = '<span class="icon stop-icon" aria-hidden="true"></span>';
+  } else {
+    els.send.classList.remove("stop-mode");
+    els.send.setAttribute("aria-label", "发送");
+    els.send.innerHTML = '<span class="icon arrow-up" aria-hidden="true"></span>';
+    els.send.disabled = false;
+  }
+}
+
+function stopGeneration() {
+  if (state.abortController) {
+    state.abortController.abort();
+  }
+}
+
 async function send(event) {
-  event.preventDefault();
+  if (event) event.preventDefault();
   if (state.streaming) return;
   const text = els.prompt.value.trim();
   if (!text && !state.attachments.length) return;
@@ -1090,7 +1385,8 @@ async function send(event) {
   els.prompt.value = "";
   autosize();
   state.streaming = true;
-  els.send.disabled = true;
+  state.abortController = new AbortController();
+  updateSendButton();
   saveThreads();
   render();
 
@@ -1099,6 +1395,7 @@ async function send(event) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ messages: messagesForApi(thread, apiContent) }),
+      signal: state.abortController.signal,
     });
     if (!response.ok || !response.body) throw new Error(await response.text());
 
@@ -1137,11 +1434,19 @@ async function send(event) {
       }
     }
   } catch (error) {
-    thread.messages.at(-1).content ||= `请求失败：${String(error.message || error).slice(0, 500)}`;
+    if (error.name === "AbortError") {
+      const lastMsg = thread.messages.at(-1);
+      if (lastMsg?.role === "assistant" && !lastMsg.content) {
+        lastMsg.content = "（已停止生成）";
+      }
+    } else {
+      thread.messages.at(-1).content ||= `请求失败：${String(error.message || error).slice(0, 500)}`;
+    }
   } finally {
     state.streaming = false;
+    state.abortController = null;
     state.expectDocument = false;
-    els.send.disabled = false;
+    updateSendButton();
     // Mark any still-running tool cards as failed (stream ended unexpectedly)
     const lastMsg = thread.messages.at(-1);
     if (lastMsg?.toolCalls) {
@@ -1154,9 +1459,8 @@ async function send(event) {
     }
     saveThreads();
     saveDocuments();
-    // Sync to server: last 2 messages (user + assistant)
-    const lastTwo = thread.messages.slice(-2);
-    syncMessages(thread.id, lastTwo);
+    // Sync all messages to server
+    syncMessages(thread.id, thread.messages);
     syncThreadMeta(thread.id, { title: thread.title });
     // Sync any new documents
     for (const doc of (thread.documents || [])) syncDocument(thread.id, doc);
@@ -1319,9 +1623,14 @@ async function handlePaste(event) {
 async function addFileAttachment(file) {
   const lower = file.name.toLowerCase();
   if (isImageFile(file)) {
-    const dataUrl = await imageToDataUrl(file).catch(() => "");
-    if (dataUrl && !state.attachments.some((item) => item.kind === "image" && item.dataUrl === dataUrl)) {
-      state.attachments.push({ id: crypto.randomUUID(), name: file.name, kind: "image", mime: file.type, dataUrl });
+    try {
+      const dataUrl = await imageToDataUrl(file);
+      if (dataUrl && !state.attachments.some((item) => item.kind === "image" && item.dataUrl === dataUrl)) {
+        const mime = dataUrl.startsWith("data:image/png") ? "image/png" : "image/jpeg";
+        state.attachments.push({ id: crypto.randomUUID(), name: file.name, kind: "image", mime, dataUrl });
+      }
+    } catch (e) {
+      showToast(e.message || "图片上传失败", "error");
     }
     return;
   }
@@ -1393,17 +1702,64 @@ function messagesForApi(thread, latestUserContent) {
 }
 
 async function imageToDataUrl(file) {
-  if (file.size > 8 * 1024 * 1024) throw new Error("图片不能超过 8MB");
-  return new Promise((resolve, reject) => {
+  if (file.size > 20 * 1024 * 1024) throw new Error("图片不能超过 20MB");
+  // Read file as data URL first
+  const raw = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
     reader.onerror = () => reject(reader.error || new Error("图片读取失败"));
     reader.readAsDataURL(file);
   });
+  // Try to compress via canvas (handles HEIC, large photos, etc.)
+  try {
+    return await compressImage(raw, file.type);
+  } catch {
+    // If canvas fails (e.g. unsupported format), return raw if small enough
+    if (raw.length < 5_000_000) return raw;
+    throw new Error("图片格式不支持或太大，请转为 JPG/PNG 后重试");
+  }
+}
+
+// Compress image via canvas: resize to max 2048px, output as JPEG
+async function compressImage(dataUrl, mimeType) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const MAX = 2048;
+        let { width, height } = img;
+        if (width > MAX || height > MAX) {
+          const scale = MAX / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        // Use original format if PNG/WebP and small, otherwise JPEG
+        const isPng = mimeType === "image/png";
+        const isSmall = img.width <= MAX && img.height <= MAX;
+        const outType = (isPng && isSmall) ? "image/png" : "image/jpeg";
+        const quality = outType === "image/jpeg" ? 0.85 : undefined;
+        const result = canvas.toDataURL(outType, quality);
+        if (!result || result === "data:,") {
+          reject(new Error("Canvas export failed"));
+          return;
+        }
+        resolve(result);
+      } catch (e) {
+        reject(e);
+      }
+    };
+    img.onerror = () => reject(new Error("图片加载失败，格式可能不支持"));
+    img.src = dataUrl;
+  });
 }
 
 function isImageFile(file) {
-  return file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(file.name);
+  return file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|heic|heif|bmp|tiff?)$/i.test(file.name);
 }
 
 function uniqueFiles(files) {

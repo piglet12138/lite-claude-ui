@@ -34,25 +34,71 @@ const googleRedirectUri = process.env.GOOGLE_REDIRECT_URI || env.GOOGLE_REDIRECT
 const googleTokenFile = path.resolve(root, process.env.GOOGLE_TOKEN_FILE || env.GOOGLE_TOKEN_FILE || ".google-token.json");
 const googleScopes = ["https://www.googleapis.com/auth/drive.file"];
 const googleOauthStates = new Map();
+// Global crash protection
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] Uncaught exception:", err.message, err.stack?.split("\n").slice(0, 3).join("\n"));
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] Unhandled rejection:", String(reason));
+});
+
 const agenticSystemPrompt = [
   "你是一个极其聪明、有深度的 AI 助手。默认用中文。不做身份声明。",
   "回答风格：深度优先，充分展开，结构清晰，不用空洞收尾语。",
   "",
-  "工具使用规则：",
-  "- web_search：需要最新信息或事实验证时搜索。可多次搜索。",
-  "- fetch_url：需要阅读某个网页/文章/文档的具体内容时使用。搜索后想深入了解某条结果时，用这个抓取全文。",
-  "- run_code：需要计算、数据处理、验证逻辑时执行代码。支持 JavaScript 和 Python。",
-  "- generate_long_document：用户明确要求生成长篇文档/报告/白皮书（20页以上）时使用。会启动多个子Agent并行写作，每个子Agent可以搜索互联网。",
-  "- create_artifact：创建文档/网页/代码等完整作品，显示在右侧面板。",
+  "## 工具使用策略（严格遵守）",
   "",
-  "create_artifact 行为模式（严格遵守）：",
+  "核心原则：**搜后深读，读完再搜**。宁可少搜几次读透内容，也不要广撒网浅尝辄止。",
+  "",
+  "搜索流程：",
+  "1. 每轮最多调用 1-2 次 web_search（不同角度），不要一次搜 3 个以上",
+  "2. 搜索结果中包含了自动抓取的页面全文 —— 认真阅读这些全文内容",
+  "3. 如果全文信息不够，用 fetch_url 抓取其他感兴趣的搜索结果 URL",
+  "4. 充分消化当前信息后，再决定是否需要换角度搜索",
+  "5. 信息足够时立即开始回答，不要为了全面而过度搜索",
+  "",
+  "工具说明：",
+  "- web_search：搜索互联网，返回摘要+自动抓取的全文。用精确关键词，不要整句搜索。",
+  "- fetch_url：读取指定 URL 全文。用于深入阅读搜索结果或用户给的链接。",
+  "- run_code：执行 JavaScript/Python 代码。用于计算、数据处理、验证。",
+  "- generate_long_document：仅在用户明确要求 20 页以上长文档时使用。",
+  "- create_artifact：创建文档/网页/代码，显示在右侧面板。",
+  "",
+  "## create_artifact 规则",
   "1. 聊天中只用 1-2 句话说明意图",
   "2. 调用 create_artifact 生成完整内容（文档至少2000字，HTML要美观完整，代码要可运行）",
   "3. 之后用 1 句话收尾",
   "4. 绝不在聊天正文中写出文档全文内容",
   "",
-  "必须用 create_artifact 的场景：写文档/报告/白皮书/方案/邮件、做网页/应用/可视化、写代码文件。",
-  "不用的场景：普通问答、短回复、简单列表。",
+  "必须用 create_artifact：写文档/报告/方案/邮件、做网页/可视化、写代码文件。",
+  "不用：普通问答、短回复、简单列表。",
+  "",
+  "## 交互式选项",
+  "",
+  "你有两种交互格式可以使用：",
+  "",
+  "### 1. 采访/规划选项（当需要了解用户需求时）",
+  "当用户的请求比较开放、需要更多信息时，先写一段简短分析（2-3句），然后一次性给出 3-5 个问题让用户选择。格式：",
+  "<<options>>",
+  '[{"question":"目标受众？","choices":[{"label":"技术人员"},{"label":"管理层"},{"label":"通用读者"}]},{"question":"篇幅偏好？","choices":[{"label":"简洁(1-2页)"},{"label":"中等(5-10页)"},{"label":"详尽(20页+)"}]},{"question":"语气风格？","choices":[{"label":"正式学术"},{"label":"商务专业"},{"label":"轻松易懂"}]}]',
+  "<</options>>",
+  "规则：",
+  "- 一次给 3-5 个问题，每个问题 2-4 个选项",
+  "- 每个 choice 有 label（必须），desc 可选",
+  "- 用户点选后所有选择一次性发回",
+  "- 正文先写一些分析/说明，然后给 <<options>>",
+  "- 可以多轮对话。如果第一轮选择后还需要细化，可以继续用 <<options>> 追问",
+  "- 任何时候需要用户做选择，都用 <<options>> 格式，不要用纯文本列表让用户自己打字",
+  "- 也可以用于引导思考：比如「你觉得哪个方向更重要？」配选项",
+  "- 收集到足够信息后直接开始工作",
+  "- 适用：写文档、做方案、技术选型、复杂分析、引导用户思考",
+  "",
+  "### 2. 建议后续问题（回答完成后）",
+  "在完整回答的末尾，生成 2-3 个后续追问建议。格式：",
+  "<<suggestions>>",
+  '["问题1", "问题2", "问题3"]',
+  "<</suggestions>>",
+  "规则：具体、有价值、20字以内。简单闲聊可以不加。",
 ].join("\n");
 
 const anthropicTools = [
@@ -591,7 +637,7 @@ async function chat(req, res) {
   const temperature = Number.isFinite(body?.temperature) ? body.temperature : 0.7;
 
   // Convert frontend messages to Anthropic format
-  const apiMessages = toAnthropicMessages(messages);
+  let apiMessages = toAnthropicMessages(messages);
 
   // Build available tools
   const tools = anthropicTools.filter((t) => {
@@ -612,10 +658,22 @@ async function chat(req, res) {
 
   const MAX_ROUNDS = 8;
 
+  const TOKEN_BUDGET = 80000; // Conservative budget to leave room for response
+
+  try {
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    console.log(`[Chat] Round ${round} start, messages: ${apiMessages.length}, est tokens: ${estimateTokens(apiMessages)}`);
     const isLastRound = round === MAX_ROUNDS - 1;
-    // After first round, remove web_search to prevent context bloat; keep fetch_url, run_code, create_artifact
-    const roundTools = round < 3 ? tools : tools.filter((t) => t.name !== "web_search" && t.name !== "fetch_url");
+    // Proactive context management: compress if approaching budget
+    if (round > 0) {
+      apiMessages = budgetCompress(apiMessages, TOKEN_BUDGET);
+    }
+    // Search allowed in first 3 rounds, fetch_url in first 5
+    const roundTools = round < 3
+      ? tools
+      : round < 5
+        ? tools.filter((t) => t.name !== "web_search")
+        : tools.filter((t) => t.name !== "web_search" && t.name !== "fetch_url");
 
     const upstreamBody = {
       model,
@@ -627,6 +685,7 @@ async function chat(req, res) {
       ...(!isLastRound && roundTools.length ? { tools: roundTools } : {}),
     };
 
+    console.log(`[Chat] Round ${round}: sending to API, body size: ${JSON.stringify(upstreamBody).length} chars`);
     const upstream = await fetch(apiEndpoint, {
       method: "POST",
       headers: {
@@ -636,6 +695,7 @@ async function chat(req, res) {
       },
       body: JSON.stringify(upstreamBody),
     });
+    console.log(`[Chat] Round ${round}: API responded ${upstream.status}`);
 
     if (!upstream.ok || !upstream.body) {
       const errText = await upstream.text().catch(() => "");
@@ -660,7 +720,8 @@ async function chat(req, res) {
           if (retryResult.stopReason === "tool_use" && retryResult.toolUseBlocks.length) {
             for (const tc of retryResult.toolUseBlocks) {
               res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
-              const toolResult = await executeTool(tc.name, tc.input, res);
+              console.log(`[Chat] Executing tool: ${tc.name}`);
+        const toolResult = await executeTool(tc.name, tc.input, res);
               if (tc.name === "create_artifact") {
                 res.write(`event: artifact\ndata: ${JSON.stringify({ title: tc.input.title || "Artifact", type: tc.input.type || "html", content: tc.input.content || "", language: tc.input.language || "", description: tc.input.description || "", file_path: tc.input.file_path || "" })}\n\n`);
               }
@@ -676,12 +737,25 @@ async function chat(req, res) {
     }
 
     const result = await consumeAnthropicStream(upstream.body, res);
+    // Normalize: if stopReason is empty/missing, infer from content
+    if (!result.stopReason) {
+      result.stopReason = result.toolUseBlocks?.length ? "tool_use" : "end_turn";
+      console.log(`[Chat] Round ${round}: stopReason was empty, inferred as ${result.stopReason}`);
+    }
+    console.log(`[Chat] Round ${round}: stream consumed, stopReason=${result.stopReason}, toolUse=${result.toolUseBlocks?.length || 0}`);
 
     if (result.stopReason === "tool_use" && result.toolUseBlocks.length) {
       const allSearches = result.toolUseBlocks.every((t) => t.name === "web_search");
-      // Only add verbose assistant tool_use blocks for non-search-only rounds
+      // Add assistant tool_use blocks (required for non-search tool calls)
       if (!allSearches) {
-        apiMessages.push({ role: "assistant", content: result.allBlocks });
+        // Trim any huge text blocks in allBlocks to avoid context bloat
+        const trimmedBlocks = result.allBlocks.map(b => {
+          if (b.type === "text" && b.text && b.text.length > 5000) {
+            return { ...b, text: b.text.slice(0, 5000) + "..." };
+          }
+          return b;
+        });
+        apiMessages.push({ role: "assistant", content: trimmedBlocks });
       }
 
       // Execute tools and build tool_result blocks
@@ -709,10 +783,18 @@ async function chat(req, res) {
         res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary, sources: toolResult.sources || undefined, codeResult: toolResult.codeResult || undefined })}\n\n`);
         res.flush?.();
 
+        // Cap tool result content to prevent context explosion
+        const maxResultLen = tc.name === "web_search" ? 12000
+          : tc.name === "fetch_url" ? 10000
+          : tc.name === "run_code" ? 5000
+          : 3000;
+        const resultContent = typeof toolResult.content === "string"
+          ? toolResult.content.slice(0, maxResultLen)
+          : toolResult.content;
         toolResultBlocks.push({
           type: "tool_result",
           tool_use_id: tc.id,
-          content: toolResult.content,
+          content: resultContent,
         });
       }
 
@@ -727,24 +809,45 @@ async function chat(req, res) {
         apiMessages.push({ role: "assistant", content: `已创建文档：${artifactNames.join("、")}。` });
         apiMessages.push({ role: "user", content: "文档已生成。如果还有其他需要补充说明的内容或建议，请简要说明。" });
       } else if (allSearches && toolResultBlocks.length) {
+        // Keep meaningful content from each search for the next round
         const searchSummary = toolResultBlocks
-          .map((b) => String(b.content || "").slice(0, 600))
+          .map((b) => String(b.content || "").slice(0, 4000))
           .filter(Boolean)
-          .join("\n\n");
-        apiMessages.push({ role: "assistant", content: `我搜索了相关信息，以下是搜索结果：\n\n${searchSummary}` });
-        apiMessages.push({ role: "user", content: "好的，请基于这些搜索结果，给出深入、全面的回答。如果信息不够，可以继续搜索其他角度。如果需要创建完整文档，使用 create_artifact。回答要有深度和细节，不要过于简短。" });
+          .join("\n\n---\n\n");
+        console.log(`[Chat] allSearches branch: ${toolResultBlocks.length} results, summary ${searchSummary.length} chars`);
+        apiMessages.push({ role: "assistant", content: `我搜索了相关信息，以下是搜索结果摘要：\n\n${searchSummary.slice(0, 12000)}` });
+        apiMessages.push({ role: "user", content: "请仔细阅读以上搜索结果和全文内容。如果信息已经足够回答问题，请直接给出深入全面的回答。如果某个方面信息不足，可以用 fetch_url 深入阅读某篇文章，或换角度再搜一次。不要重复搜索已有信息。" });
       } else {
+        console.log(`[Chat] Non-search tool results: ${toolResultBlocks.length} blocks`);
         apiMessages.push({ role: "user", content: toolResultBlocks });
       }
       continue; // Next round
     }
 
-    // No tool calls: final answer was already streamed
+    // No tool calls — check if model intended to use a tool but stream was cut short
+    if (result.textContent && !result.toolUseBlocks?.length && round < MAX_ROUNDS - 1) {
+      const text = result.textContent.slice(-200);
+      const wantsArtifact = /生成|创建|整理成|输出|写一份|制作/.test(text) && /报告|文档|方案|调研|表格|artifact/i.test(text);
+      if (wantsArtifact) {
+        console.log(`[Chat] Round ${round}: detected unfinished artifact intent, auto-continuing`);
+        apiMessages.push({ role: "assistant", content: result.textContent });
+        apiMessages.push({ role: "user", content: "请继续，使用 create_artifact 工具生成完整内容。" });
+        continue;
+      }
+    }
     break;
   }
 
-  res.write("event: done\ndata: {}\n\n");
-  res.end();
+  } catch (loopErr) {
+    console.error("[Chat] Agentic loop error:", loopErr.message, "\n", loopErr.stack);
+    try {
+      res.write(`data: ${JSON.stringify({ delta: `\n\n---\n请求出错：${String(loopErr.message).slice(0, 200)}` })}\n\n`);
+    } catch {}
+  }
+  try {
+    res.write("event: done\ndata: {}\n\n");
+    res.end();
+  } catch {}
 }
 
 // ---------------------------------------------------------------------------
@@ -978,6 +1081,51 @@ async function executeTool(name, args, res = null) {
 }
 
 // Compress messages for retry after 400 — flatten tool exchanges into a single user summary
+// Estimate token count (rough: 1 token ≈ 3.5 chars for mixed zh/en)
+function estimateTokens(messages) {
+  let chars = 0;
+  for (const msg of messages) {
+    if (typeof msg.content === "string") {
+      chars += msg.content.length;
+    } else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === "text") chars += (block.text || "").length;
+        else if (block.type === "tool_use") chars += JSON.stringify(block.input || {}).length;
+        else if (block.type === "tool_result") chars += (typeof block.content === "string" ? block.content : JSON.stringify(block.content || "")).length;
+      }
+    }
+  }
+  return Math.ceil(chars / 3.5);
+}
+
+// Progressively compress messages to fit within token budget
+function budgetCompress(messages, maxTokens) {
+  let est = estimateTokens(messages);
+  if (est <= maxTokens) return messages;
+
+  // Strategy 1: Truncate long tool_result content (keep first 2000 chars)
+  const compressed = JSON.parse(JSON.stringify(messages)); // deep clone
+  for (let i = 0; i < compressed.length - 2; i++) {
+    const msg = compressed[i];
+    if (msg.role === "user" && Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === "tool_result" && typeof block.content === "string" && block.content.length > 2000) {
+          block.content = block.content.slice(0, 2000) + "\n...(内容已截断)";
+        }
+      }
+    }
+    if (msg.role === "assistant" && typeof msg.content === "string" && msg.content.length > 3000) {
+      // Truncate long assistant search summaries from earlier rounds
+      msg.content = msg.content.slice(0, 3000) + "\n...(已截断)";
+    }
+  }
+  est = estimateTokens(compressed);
+  if (est <= maxTokens) return compressed;
+
+  // Strategy 2: Drop early tool rounds entirely, keep summary
+  return compressMessages(compressed);
+}
+
 function compressMessages(messages) {
   const compressed = [];
   let toolSummary = "";
@@ -1491,13 +1639,19 @@ function parseDataPdf(url) {
 
 function parseDataImage(url) {
   const str = String(url || "").trim();
-  const headerMatch = str.match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,/i);
+  // Accept common image formats including those converted by canvas
+  const headerMatch = str.match(/^data:(image\/(?:png|jpe?g|webp|gif|bmp|tiff?|heic|heif|svg\+xml));base64,/i);
   if (!headerMatch) return null;
   const data = str.slice(headerMatch[0].length).replace(/[\s\r\n]/g, "").slice(0, 7_500_000);
   if (!data) return null;
+  // Normalize media type for Anthropic API (only supports png, jpeg, webp, gif)
+  let mediaType = headerMatch[1].toLowerCase().replace("image/jpg", "image/jpeg");
+  if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mediaType)) {
+    mediaType = "image/jpeg"; // Canvas converts unsupported formats to jpeg
+  }
   return {
     type: "base64",
-    media_type: headerMatch[1].toLowerCase().replace("image/jpg", "image/jpeg"),
+    media_type: mediaType,
     data,
   };
 }
