@@ -19,6 +19,7 @@
           <span class="icon plus" aria-hidden="true"></span>
           新对话
         </button>
+
         <div class="nav-label">最近</div>
         <div id="threadList" class="thread-list"></div>
         <div class="nav-label">文档</div>
@@ -111,7 +112,7 @@
               <textarea id="prompt" rows="1" placeholder="发消息给 Claude"></textarea>
               <div class="composer-actions">
                 <label class="tool-button" title="上传文本或 Google Docs 导出的 HTML">
-                  <input id="fileInput" type="file" multiple accept="image/*,.txt,.md,.markdown,.csv,.json,.html,.htm,.xml,.log,.yaml,.yml,.docx" />
+                  <input id="fileInput" type="file" multiple accept="image/*,.txt,.md,.markdown,.csv,.json,.html,.htm,.xml,.log,.yaml,.yml,.docx,.pdf,.xlsx,.xls" />
                   <span class="icon attach" aria-hidden="true"></span>
                 </label>
                 <button id="send" class="send-button" type="submit" aria-label="发送">
@@ -149,6 +150,24 @@
       <a href="/privacy.html">Privacy Policy</a>
       <a href="/terms.html">Terms of Service</a>
     </footer>
-    <script src="/app.js?v=20260504-public-home" type="module"></script>
+    <script src="/app.js?v=20260506-v7" type="module"></script>
+    <script>
+    (function(){
+      if(navigator.doNotTrack==="1")return;
+      var s=screen.width+"x"+screen.height;
+      var raw=s+"|"+navigator.userAgent+"|"+(navigator.language||"");
+      function hash(str){
+        var h1=0xdeadbeef,h2=0x41c6ce57;
+        for(var i=0;i<str.length;i++){var c=str.charCodeAt(i);h1=Math.imul(h1^c,2654435761);h2=Math.imul(h2^c,1597334677);}
+        h1=Math.imul(h1^(h1>>>16),2246822507)^Math.imul(h2^(h2>>>13),3266489909);
+        h2=Math.imul(h2^(h2>>>16),2246822507)^Math.imul(h1^(h1>>>13),3266489909);
+        return (h2>>>0).toString(16).padStart(8,"0")+(h1>>>0).toString(16).padStart(8,"0")+(h1>>>0^h2>>>0).toString(16).padStart(8,"0")+((h1+h2)>>>0).toString(16).padStart(8,"0");
+      }
+      var fp=hash(raw);
+      var data=JSON.stringify({path:"/app",referrer:document.referrer||"",screen:s,fp:fp});
+      if(navigator.sendBeacon){navigator.sendBeacon("/api/analytics/pv",new Blob([data],{type:"application/json"}));}
+      else{fetch("/api/analytics/pv",{method:"POST",headers:{"Content-Type":"application/json"},body:data,keepalive:true});}
+    })();
+    </script>
   </body>
 </html>

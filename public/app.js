@@ -64,6 +64,7 @@ const els = {
   artifactSourceTab: document.querySelector("#artifactSourceTab"),
   sidebarToggle: document.querySelector("#sidebarToggle"),
   webSearchToggle: document.querySelector("#webSearchToggle"),
+
 };
 
 const PENDING_GOOGLE_UPLOAD_KEY = "lite-claude-pending-google-upload";
@@ -128,7 +129,15 @@ function wireEvents() {
   els.copyDoc?.addEventListener("click", copyCurrentDoc);
   els.downloadDoc.addEventListener("click", () => {
     const doc = activeDocument();
-    downloadCurrentDoc(doc?.type === "html" ? "html" : "markdown");
+    if (!doc) return;
+    if (doc.type === "html") {
+      downloadCurrentDoc("html");
+    } else if (doc.type === "code") {
+      downloadCurrentDoc("source");
+    } else {
+      // Document type: download as DOCX
+      exportCurrentDocAsDocx();
+    }
   });
   els.uploadGoogleDoc.addEventListener("click", uploadCurrentDocToGoogle);
   els.artifactPreviewTab.addEventListener("click", () => setArtifactView("preview"));
@@ -146,6 +155,7 @@ function wireEvents() {
     renderDocumentPanel();
   });
   els.sidebarToggle.addEventListener("click", () => document.body.classList.toggle("sidebar-open"));
+
   document.querySelectorAll(".starter").forEach((button) => {
     button.addEventListener("click", () => {
       els.prompt.value = button.dataset.prompt || "";
@@ -616,6 +626,15 @@ function regenerateLastMessage() {
     } finally {
       state.streaming = false;
       els.send.disabled = false;
+      const lastMsg = thread.messages.at(-1);
+      if (lastMsg?.toolCalls) {
+        for (const tc of lastMsg.toolCalls) {
+          if (tc.status === "running") {
+            tc.status = "completed";
+            tc.summary = tc.summary || "连接中断";
+          }
+        }
+      }
       saveThreads();
       saveDocuments();
       render();
@@ -636,6 +655,7 @@ function renderToolCard(tc) {
   if (tc.name === "web_search") label = `搜索「${tc.args?.query || "..."}」`;
   else if (tc.name === "fetch_url") label = `读取 ${tc.args?.url ? new URL(tc.args.url).hostname : "..."}`;
   else if (tc.name === "run_code") label = `运行 ${tc.args?.language || "code"}`;
+  else if (tc.name === "generate_long_document") label = `生成长文档「${tc.args?.topic || "..."}」`;
   else if (tc.name === "create_artifact") label = `创建「${tc.args?.title || "Artifact"}」`;
 
   const header = document.createElement("div");
@@ -703,6 +723,24 @@ function renderToolCard(tc) {
       output.classList.toggle("expanded", tc._expanded);
       card.querySelector(".tool-chevron")?.classList.toggle("expanded", tc._expanded);
     });
+  }
+
+  // Long doc progress log
+  if (tc.name === "generate_long_document" && tc._progressLog?.length) {
+    const logDiv = document.createElement("div");
+    logDiv.className = "tool-code-output expanded";
+    logDiv.style.maxHeight = "150px";
+    logDiv.style.overflowY = "auto";
+    logDiv.style.fontSize = "12px";
+    logDiv.style.lineHeight = "1.6";
+    logDiv.style.color = "var(--muted)";
+    const logText = tc._progressLog.map(l => {
+      if (l.includes("完成") || l.includes("✓")) return `<span style="color:#4d9950">${escapeHtml(l)}</span>`;
+      if (l.includes("失败") || l.includes("错误")) return `<span style="color:var(--accent)">${escapeHtml(l)}</span>`;
+      return escapeHtml(l);
+    }).join("<br>");
+    logDiv.innerHTML = logText;
+    card.append(logDiv);
   }
 
   // Clickable artifact card → open doc panel
@@ -827,7 +865,7 @@ function renderDocumentPanel() {
   els.docTitle.textContent = doc.title;
   els.docMeta.textContent = artifactMeta(doc);
   els.downloadHtml?.classList.toggle("hidden", doc.type !== "document" && doc.type !== "html");
-  els.downloadDoc.textContent = doc.type === "html" ? "下载源码" : "下载";
+  els.downloadDoc.textContent = doc.type === "html" ? "下载源码" : doc.type === "code" ? "下载源码" : "下载 DOCX";
   // Version navigation
   renderVersionNav(doc);
   els.uploadGoogleDoc.disabled = false;
@@ -989,6 +1027,16 @@ async function send(event) {
     state.streaming = false;
     state.expectDocument = false;
     els.send.disabled = false;
+    // Mark any still-running tool cards as failed (stream ended unexpectedly)
+    const lastMsg = thread.messages.at(-1);
+    if (lastMsg?.toolCalls) {
+      for (const tc of lastMsg.toolCalls) {
+        if (tc.status === "running") {
+          tc.status = "completed";
+          tc.summary = tc.summary || "连接中断";
+        }
+      }
+    }
     saveThreads();
     saveDocuments();
     render();
@@ -1020,6 +1068,23 @@ function handleSSEEvent(eventType, data, assistant, thread) {
       }
       queueStreamRender(thread, assistant);
       break;
+    case "longdoc_progress": {
+      // Update the generate_long_document tool card with progress
+      if (assistant.toolCalls) {
+        const tc = assistant.toolCalls.find(t => t.name === "generate_long_document" && t.status === "running");
+        if (tc) {
+          tc.summary = data.message || tc.summary;
+          // Persist progress log for refresh recovery
+          tc._progressLog = tc._progressLog || [];
+          if (data.message) tc._progressLog.push(data.message);
+          if (tc._progressLog.length > 20) tc._progressLog = tc._progressLog.slice(-15);
+          queueStreamRender(thread, assistant);
+          // Save periodically so refresh shows latest state
+          try { saveThreads(); } catch {}
+        }
+      }
+      break;
+    }
     case "artifact":
       upsertArtifactFromTool(data, thread);
       renderDocuments();
@@ -1107,19 +1172,26 @@ async function handleFiles() {
 }
 
 async function handlePaste(event) {
-  const files = Array.from(event.clipboardData?.files || []).filter(isImageFile);
-  const items = Array.from(event.clipboardData?.items || [])
-    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+  const allFiles = Array.from(event.clipboardData?.files || []);
+  const itemFiles = Array.from(event.clipboardData?.items || [])
+    .filter((item) => item.kind === "file")
     .map((item) => item.getAsFile())
     .filter(Boolean);
-  const capacity = Math.max(0, 6 - state.attachments.filter((item) => item.kind === "image").length);
-  const images = uniqueFiles([...files, ...items]).slice(0, capacity);
-  if (!images.length) return;
+  // Deduplicate by name+size
+  const seen = new Set();
+  const files = [...allFiles, ...itemFiles].filter(f => {
+    const key = f.name + ":" + f.size;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 6);
+  if (!files.length) return;
   event.preventDefault();
-  for (const [index, file] of images.entries()) {
-    const name = file.name || `pasted-image-${Date.now()}-${index + 1}.png`;
-    await addFileAttachment(new File([file], name, { type: file.type || "image/png" }));
+  for (const file of files) {
+    const name = file.name || (file.type.startsWith("image/") ? `pasted-image-${Date.now()}.png` : `pasted-file-${Date.now()}`);
+    await addFileAttachment(new File([file], name, { type: file.type }));
   }
+  saveDocuments();
   render();
 }
 
@@ -1130,6 +1202,18 @@ async function addFileAttachment(file) {
     if (dataUrl && !state.attachments.some((item) => item.kind === "image" && item.dataUrl === dataUrl)) {
       state.attachments.push({ id: crypto.randomUUID(), name: file.name, kind: "image", mime: file.type, dataUrl });
     }
+    return;
+  }
+  if (lower.endsWith(".pdf") || lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
+    if (file.size > 32 * 1024 * 1024) { alert("文件不能超过 32MB"); return; }
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    const kind = lower.endsWith(".pdf") ? "pdf" : "xlsx";
+    state.attachments.push({ id: crypto.randomUUID(), name: file.name, kind, mime: file.type || "application/octet-stream", dataUrl });
     return;
   }
   if (lower.endsWith(".docx")) {
@@ -1159,7 +1243,7 @@ function attachmentsForDisplay(attachments) {
     kind: file.kind,
     name: file.name,
     mime: file.mime,
-    dataUrl: file.dataUrl || "",
+    dataUrl: (file.kind === "pdf" || file.kind === "xlsx") ? "" : (file.dataUrl || ""),
   }));
 }
 
@@ -1167,12 +1251,14 @@ function buildUserApiContent(text, attachments) {
   const parts = [];
   // Build text part: user message + file contents (for context)
   const fileParts = attachments
-    .filter((f) => f.kind !== "image" && f.content)
+    .filter((f) => f.kind !== "image" && f.kind !== "pdf" && f.kind !== "xlsx" && f.content)
     .map((f) => `[附件：${f.name}]\n${f.content}`);
   const textContent = [text, ...fileParts].filter(Boolean).join("\n\n").trim();
   if (textContent) parts.push({ type: "text", text: textContent });
   for (const file of attachments) {
     if (file.kind === "image") parts.push({ type: "image_url", image_url: { url: file.dataUrl } });
+    if (file.kind === "pdf") parts.push({ type: "pdf_url", pdf_url: { url: file.dataUrl, name: file.name } });
+    if (file.kind === "xlsx") parts.push({ type: "file_url", file_url: { url: file.dataUrl, name: file.name } });
   }
   return parts.length === 1 && parts[0].type === "text" ? parts[0].text : parts;
 }
@@ -1536,7 +1622,11 @@ function loadJson(key, fallback) {
 }
 
 function saveThreads() {
-  localStorage.setItem(THREADS_KEY, JSON.stringify(state.threads.slice(0, 30)));
+  try {
+    localStorage.setItem(THREADS_KEY, JSON.stringify(state.threads.slice(0, 30)));
+  } catch (e) {
+    console.warn("saveThreads failed (quota?):", e.message);
+  }
 }
 
 function saveDocuments() {
@@ -1670,6 +1760,43 @@ function documentStyles() {
 
 function safeFilename(name) {
   return (name || "document").replace(/[\\/:*?"<>|]+/g, "-").slice(0, 80);
+}
+
+// ---------------------------------------------------------------------------
+// Export current document as DOCX
+// ---------------------------------------------------------------------------
+async function exportCurrentDocAsDocx() {
+  const doc = activeDocument();
+  if (!doc) return;
+  const btn = els.downloadDoc;
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "生成中...";
+  try {
+    const content = doc.type === "html" ? htmlToText(doc.content) : doc.content;
+    const response = await fetch("/api/export-docx", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: doc.title, content }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || "导出失败");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = safeFilename(doc.title) + ".docx";
+    a.click();
+    URL.revokeObjectURL(url);
+    btn.textContent = "已下载";
+    setTimeout(() => { btn.textContent = originalText; btn.disabled = false; }, 1200);
+  } catch (err) {
+    alert("DOCX 导出失败: " + err.message);
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
 }
 
 function stripImagePlaceholders(text) {
