@@ -357,10 +357,11 @@ async function showChat() {
   resumeLongDocJobs();
 }
 
-// Save partial content if user leaves/refreshes during streaming
-window.addEventListener("beforeunload", () => {
+// Save partial content and warn if user leaves/refreshes during streaming
+window.addEventListener("beforeunload", (e) => {
   if (state.streaming) {
     try { saveThreads(); } catch {}
+    e.preventDefault();
   }
 });
 
@@ -1014,7 +1015,7 @@ function regenerateLastMessage() {
   const lastUser = thread.messages.at(-1);
   if (!lastUser || lastUser.role !== "user") return;
   // Re-trigger send with existing user message
-  thread.messages.push({ role: "assistant", content: "", toolCalls: [] });
+  thread.messages.push({ role: "assistant", content: "", toolCalls: [], _streamStart: Date.now() });
   state.streaming = true;
   state.abortController = new AbortController();
   updateSendButton();
@@ -1173,22 +1174,100 @@ function renderToolCard(tc) {
     });
   }
 
-  // Long doc progress log
-  if (tc.name === "generate_long_document" && tc._progressLog?.length) {
-    const logDiv = document.createElement("div");
-    logDiv.className = "tool-code-output expanded";
-    logDiv.style.maxHeight = "150px";
-    logDiv.style.overflowY = "auto";
-    logDiv.style.fontSize = "12px";
-    logDiv.style.lineHeight = "1.6";
-    logDiv.style.color = "var(--muted)";
-    const logText = tc._progressLog.map(l => {
-      if (l.includes("完成") || l.includes("✓")) return `<span style="color:#4d9950">${escapeHtml(l)}</span>`;
-      if (l.includes("失败") || l.includes("错误")) return `<span style="color:var(--accent)">${escapeHtml(l)}</span>`;
-      return escapeHtml(l);
-    }).join("<br>");
-    logDiv.innerHTML = logText;
-    card.append(logDiv);
+  // Long doc progress log with progress bar
+  if (tc.name === "generate_long_document") {
+    const progressDiv = document.createElement("div");
+    progressDiv.className = "longdoc-progress";
+
+    // Parse progress to determine stage and percentage
+    const logs = tc._progressLog || [];
+    const lastLog = logs[logs.length - 1] || "";
+    let pct = 0, stageLabel = "准备中...";
+    if (lastLog.includes("大纲")) { pct = 10; stageLabel = "规划大纲"; }
+    if (lastLog.includes("搜索")) { pct = 20; stageLabel = "搜索参考资料"; }
+    const writingMatch = lastLog.match(/第\s*(\d+).*?\/(\d+)\s*章/);
+    const chapterDone = logs.filter(l => l.includes("章") && (l.includes("完成") || l.includes("done"))).length;
+    if (writingMatch) {
+      const current = parseInt(writingMatch[1]);
+      const total = parseInt(writingMatch[2]);
+      pct = 25 + Math.round((current / total) * 65);
+      stageLabel = `撰写中 (${current}/${total} 章)`;
+    } else if (chapterDone > 0) {
+      // Estimate from completed chapters in logs
+      const totalMatch = logs.join(" ").match(/(\d+)\s*章/g);
+      const totalChapters = totalMatch ? Math.max(...totalMatch.map(m => parseInt(m))) : 6;
+      pct = 25 + Math.round((chapterDone / totalChapters) * 65);
+      stageLabel = `撰写中 (${chapterDone} 章已完成)`;
+    }
+    if (lastLog.includes("组装")) { pct = 92; stageLabel = "组装文档"; }
+    if (lastLog.includes("文档完成")) { pct = 100; stageLabel = "完成"; }
+    if (tc.status === "completed") pct = 100;
+
+    // Progress bar
+    const bar = document.createElement("div");
+    bar.className = "longdoc-bar";
+    bar.innerHTML = `<div class="longdoc-bar-fill" style="width:${pct}%"></div>`;
+    progressDiv.append(bar);
+
+    // Stage label + elapsed time
+    const info = document.createElement("div");
+    info.className = "longdoc-info";
+    const elapsed = tc._startTime ? Math.round((Date.now() - tc._startTime) / 1000) : 0;
+    const elapsedStr = elapsed > 0 ? `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}` : "";
+    info.innerHTML = `<span>${escapeHtml(stageLabel)}</span>${elapsedStr ? `<span class="longdoc-elapsed">${elapsedStr}</span>` : ""}`;
+    progressDiv.append(info);
+
+    // Tip messages (rotate every 8 seconds)
+    if (tc.status === "running") {
+      if (!tc._startTime) tc._startTime = Date.now();
+      const tips = [
+        "长文档由多个子 Agent 并行撰写，每章独立生成后汇编",
+        "生成过程中可以放心刷新页面，进度不会丢失",
+        "每个章节约需 20-40 秒，取决于复杂度",
+        "生成完成后可以导出为 DOCX 格式",
+        "Opus 模型正在深度思考，好文档值得等待",
+        "多个 API Key 轮流工作中，最大化生成速度",
+      ];
+      const tipIdx = Math.floor(Date.now() / 8000) % tips.length;
+      const tipDiv = document.createElement("div");
+      tipDiv.className = "longdoc-tip";
+      tipDiv.textContent = tips[tipIdx];
+      progressDiv.append(tipDiv);
+    }
+
+    card.append(progressDiv);
+
+    // Detailed log (collapsed by default)
+    if (logs.length > 0) {
+      const toggle = document.createElement("div");
+      toggle.className = "longdoc-log-toggle";
+      toggle.textContent = tc._logExpanded ? "收起日志 ▴" : "查看详细日志 ▾";
+      toggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        tc._logExpanded = !tc._logExpanded;
+        const thread = state.threads.find(t => t.id === state.activeId);
+        const assistant = thread?.messages?.at(-1);
+        if (thread && assistant) queueStreamRender(thread, assistant);
+      });
+      card.append(toggle);
+
+      if (tc._logExpanded) {
+        const logDiv = document.createElement("div");
+        logDiv.className = "tool-code-output expanded";
+        logDiv.style.maxHeight = "150px";
+        logDiv.style.overflowY = "auto";
+        logDiv.style.fontSize = "12px";
+        logDiv.style.lineHeight = "1.6";
+        logDiv.style.color = "var(--muted)";
+        const logText = logs.map(l => {
+          if (l.includes("完成") || l.includes("✓")) return `<span style="color:#4d9950">${escapeHtml(l)}</span>`;
+          if (l.includes("失败") || l.includes("错误")) return `<span style="color:var(--accent)">${escapeHtml(l)}</span>`;
+          return escapeHtml(l);
+        }).join("<br>");
+        logDiv.innerHTML = logText;
+        card.append(logDiv);
+      }
+    }
   }
 
   // Clickable artifact card → open doc panel
@@ -1289,6 +1368,8 @@ function updateStreamingMessage(assistant) {
   let bubble = body.querySelector(".message-bubble.streaming");
   const content = displayAssistantMessage(assistant.content);
   if (content.trim()) {
+    // Remove waiting indicator if present
+    body.querySelector(".stream-waiting")?.remove();
     if (!bubble) {
       bubble = document.createElement("div");
       bubble.className = "message-bubble streaming";
@@ -1298,6 +1379,26 @@ function updateStreamingMessage(assistant) {
       else body.append(bubble);
     }
     bubble.innerHTML = renderRichDocument(content, "chat");
+  } else if (!content.trim() && state.streaming && !body.querySelector(".stream-waiting")) {
+    // No content yet — show a waiting indicator with elapsed time
+    const waiting = document.createElement("div");
+    waiting.className = "stream-waiting";
+    waiting.innerHTML = `<span class="stream-waiting-dot"></span><span class="stream-waiting-text">思考中...</span>`;
+    const actions = body.querySelector(".message-actions");
+    if (actions) body.insertBefore(waiting, actions);
+    else body.append(waiting);
+    // Update elapsed time every second
+    if (!assistant._waitingTimer) {
+      assistant._waitingTimer = setInterval(() => {
+        const el = document.querySelector(".stream-waiting-text");
+        if (!el || !state.streaming) { clearInterval(assistant._waitingTimer); assistant._waitingTimer = null; return; }
+        const sec = Math.round((Date.now() - (assistant._streamStart || Date.now())) / 1000);
+        if (sec >= 5) {
+          const tips = ["深度思考中", "正在推理", "组织回答中", "分析问题中"];
+          el.textContent = `${tips[Math.floor(sec / 6) % tips.length]}... ${sec}s`;
+        }
+      }, 1000);
+    }
   }
 
   // Scroll to bottom
@@ -1446,7 +1547,7 @@ async function send(event) {
 
   thread.messages.push({ role: "user", content: userContent, attachments: displayAttachments });
   thread.title = titleFrom(userContent || displayAttachments[0]?.name || "图片");
-  thread.messages.push({ role: "assistant", content: "", toolCalls: [] });
+  thread.messages.push({ role: "assistant", content: "", toolCalls: [], _streamStart: Date.now() });
   state.attachments = [];
   els.prompt.value = "";
   autosize();
