@@ -1220,8 +1220,13 @@ img.brand-logo.large {
 }
 
 .tool-code-output.expanded {
-  max-height: 300px;
+  max-height: 600px;
+  overflow-y: auto;
   margin-top: 8px;
+}
+
+.tool-code-output.has-images.expanded {
+  max-height: none;
 }
 
 .tool-code-output pre {

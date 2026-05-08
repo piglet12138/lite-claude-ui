@@ -146,7 +146,7 @@ const anthropicTools = [
   },
   {
     name: "run_code",
-    description: "Execute JavaScript or Python code in a sandboxed environment. Use for calculations, data processing, generating outputs, or demonstrating code. Returns stdout/stderr output.",
+    description: "Execute JavaScript or Python code. Use for calculations, data processing, generating charts, or demonstrating code. Python has numpy, pandas, matplotlib available. Matplotlib charts are auto-captured and displayed inline — just use plt.plot()/plt.savefig() normally. Returns stdout/stderr and any generated images.",
     input_schema: {
       type: "object",
       properties: {

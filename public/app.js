@@ -1241,7 +1241,7 @@ function renderToolCard(tc) {
   // Expandable output for run_code
   if (tc.name === "run_code" && tc.codeResult) {
     const output = document.createElement("div");
-    output.className = `tool-code-output${tc._expanded ? " expanded" : ""}`;
+    output.className = `tool-code-output${tc._expanded ? " expanded" : ""}${tc.codeResult.images?.length ? " has-images" : ""}`;
     // Show generated images inline
     if (tc.codeResult.images?.length) {
       const imgContainer = document.createElement("div");

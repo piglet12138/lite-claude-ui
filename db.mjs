@@ -113,6 +113,7 @@ const stmts = {
   // Documents
   listDocuments: db.prepare("SELECT * FROM documents WHERE thread_id = ?"),
   getDocument: db.prepare("SELECT * FROM documents WHERE id = ?"),
+  findDocByTitle: db.prepare("SELECT * FROM documents WHERE thread_id = ? AND title = ? LIMIT 1"),
   upsertDocument: db.prepare(`INSERT INTO documents (id, thread_id, title, type, content, language, description, versions, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET title=excluded.title, type=excluded.type, content=excluded.content,
@@ -200,8 +201,12 @@ export const dbDocuments = {
     return { ...row, versions: JSON.parse(row.versions || "[]") };
   },
   upsert(threadId, doc) {
+    // Check if a document with same title already exists in this thread
+    const title = doc.title || "未命名";
+    const existing = stmts.findDocByTitle.get(threadId, title);
+    const id = existing?.id || doc.id;
     stmts.upsertDocument.run(
-      doc.id, threadId, doc.title || "未命名", doc.type || "document",
+      id, threadId, title, doc.type || "document",
       doc.content || "", doc.language || "", doc.description || "",
       JSON.stringify(doc.versions || [])
     );
