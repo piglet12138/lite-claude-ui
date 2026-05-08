@@ -1243,6 +1243,20 @@ img.brand-logo.large {
   color: #e07060;
 }
 
+.code-output-images {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.code-output-images img {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
 /* Regenerate button */
 .icon-regen {
   display: inline-block;

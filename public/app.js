@@ -1242,8 +1242,20 @@ function renderToolCard(tc) {
   if (tc.name === "run_code" && tc.codeResult) {
     const output = document.createElement("div");
     output.className = `tool-code-output${tc._expanded ? " expanded" : ""}`;
+    // Show generated images inline
+    if (tc.codeResult.images?.length) {
+      const imgContainer = document.createElement("div");
+      imgContainer.className = "code-output-images";
+      for (const src of tc.codeResult.images) {
+        const img = document.createElement("img");
+        img.src = src;
+        img.alt = "Code output";
+        imgContainer.append(img);
+      }
+      output.append(imgContainer);
+    }
     const pre = document.createElement("pre");
-    pre.textContent = tc.codeResult.output || "(no output)";
+    pre.textContent = tc.codeResult.output || (tc.codeResult.images?.length ? "(图表已生成)" : "(no output)");
     if (tc.codeResult.error) pre.classList.add("error");
     output.append(pre);
     card.append(output);
@@ -1252,6 +1264,11 @@ function renderToolCard(tc) {
       output.classList.toggle("expanded", tc._expanded);
       card.querySelector(".tool-chevron")?.classList.toggle("expanded", tc._expanded);
     });
+    // Auto-expand if there are images
+    if (tc.codeResult.images?.length && !tc._expanded) {
+      tc._expanded = true;
+      output.classList.add("expanded");
+    }
   }
 
   // Long doc progress log with progress bar

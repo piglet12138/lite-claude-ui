@@ -1685,21 +1685,52 @@ function extractTextFromHtml(html) {
 
 async function executeCode(language, code) {
   const { execFile } = await import("node:child_process");
-  const { writeFile, unlink } = await import("node:fs/promises");
+  const { writeFile, unlink, readFile, readdir, mkdir, rm } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
-  const tmpFile = path.join(tmpdir(), `claude-exec-${Date.now()}.${language === "python" ? "py" : "mjs"}`);
 
-  await writeFile(tmpFile, code, "utf8");
+  // Create a temp working directory for this execution
+  const workDir = path.join(tmpdir(), `claude-exec-${Date.now()}`);
+  await mkdir(workDir, { recursive: true });
+  const ext = language === "python" ? "py" : "mjs";
+  const tmpFile = path.join(workDir, `code.${ext}`);
+
+  // For Python: auto-inject Agg backend and auto-save any open figures
+  let finalCode = code;
+  if (language === "python") {
+    const preamble = `import matplotlib\nmatplotlib.use("Agg")\n`;
+    const postamble = `\n\n# Auto-save open matplotlib figures\ntry:\n    import matplotlib.pyplot as _plt\n    for _i, _fig in enumerate(_plt.get_fignums()):\n        _plt.figure(_fig).savefig(f"${workDir}/figure_{_i}.png", dpi=150, bbox_inches="tight")\nexcept Exception:\n    pass\n`;
+    finalCode = preamble + code + postamble;
+  }
+
+  await writeFile(tmpFile, finalCode, "utf8");
   const cmd = language === "python" ? "python3" : process.execPath;
   const args = [tmpFile];
 
   return new Promise((resolve) => {
-    const proc = execFile(cmd, args, { timeout: 15000, maxBuffer: 512 * 1024 }, (err, stdout, stderr) => {
-      unlink(tmpFile).catch(() => {});
+    const env = { ...process.env, MPLBACKEND: "Agg" };
+    const proc = execFile(cmd, args, { timeout: 30000, maxBuffer: 2 * 1024 * 1024, cwd: workDir, env }, async (err, stdout, stderr) => {
+      // Scan for generated image files
+      const images = [];
+      try {
+        const files = await readdir(workDir);
+        for (const f of files) {
+          if (/\.(png|jpg|jpeg|svg)$/i.test(f)) {
+            const data = await readFile(path.join(workDir, f));
+            const ext = path.extname(f).slice(1).toLowerCase();
+            const mime = ext === "svg" ? "image/svg+xml" : ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
+            images.push(`data:${mime};base64,${data.toString("base64")}`);
+          }
+        }
+      } catch {}
+      // Cleanup
+      rm(workDir, { recursive: true, force: true }).catch(() => {});
+
       if (err) {
-        resolve({ output: stderr || err.message || "Execution failed", error: true });
+        // Strip the preamble/postamble line numbers from error messages
+        const cleanErr = (stderr || err.message || "Execution failed").replace(/code\.py/g, "script");
+        resolve({ output: cleanErr, error: true, images });
       } else {
-        resolve({ output: stdout + (stderr ? `\n[stderr]: ${stderr}` : ""), error: false });
+        resolve({ output: stdout + (stderr ? `\n[stderr]: ${stderr}` : ""), error: false, images });
       }
     });
   });
