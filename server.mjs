@@ -182,20 +182,55 @@ const anthropicTools = [
 ];
 const apiEndpoint = `${baseUrl.replace(/\/v1\/?$/, "")}/v1/messages`;
 
-// Sub-agent key pool (for parallel chapter generation only; main chat uses apiKey)
-const subAgentKeys = [
-  "sk-CPxTJzGwYsIJNbLwYFb9PVutcfVYqxPqVquDXzNX1x8xoVZK",
-  "sk-271gcSzCYCEfEPzWVj142H5z6hmdrrURPP1sFEOWlvhVAtQh",
-  "sk-v3QFYug0GdOWlsfGgfIK5AOo5MOirIGfzEEFbGbXXgbV4hgS",
-  "sk-o2xdRSW8WEpJTXA9skDZZnT8IzG5wXVTvooIivustgxrCAAI",
-  "sk-W8u7rTLwArVrrV6ZKV2G08pvjUZx49vFm4XaqQMCpNF9OhXX",
-];
-let subAgentKeyIndex = 0;
-function nextSubAgentKey() {
-  const key = subAgentKeys[subAgentKeyIndex % subAgentKeys.length];
-  subAgentKeyIndex++;
-  return key;
+// ---------------------------------------------------------------------------
+// API Key Pool — round-robin with temporary cooldown on failure
+// ---------------------------------------------------------------------------
+// Keys from .env: ANTHROPIC_API_KEY is the primary, SUB_AGENT_KEYS is comma-separated extras
+const allApiKeys = [
+  apiKey,
+  ...(process.env.SUB_AGENT_KEYS || env.SUB_AGENT_KEYS || "")
+    .split(",").map(k => k.trim()).filter(Boolean),
+].filter(Boolean);
+const keyCooldowns = new Map(); // key -> cooldownUntil timestamp
+const COOLDOWN_MS = 3 * 60_000; // 3 minutes cooldown after failure
+let keyIndex = 0;
+
+function pickKey(preferSub = false) {
+  const now = Date.now();
+  // If preferSub and we have >1 key, start from index 1 to skip primary
+  const startOffset = (preferSub && allApiKeys.length > 1) ? 1 : 0;
+  // Try all keys, starting from current index
+  for (let i = 0; i < allApiKeys.length; i++) {
+    const idx = (keyIndex + startOffset + i) % allApiKeys.length;
+    const key = allApiKeys[idx];
+    const coolUntil = keyCooldowns.get(key) || 0;
+    if (now >= coolUntil) {
+      keyIndex = idx + 1; // advance for next call
+      return key;
+    }
+  }
+  // All keys on cooldown — use the one that cools down soonest
+  let bestKey = allApiKeys[0], bestTime = Infinity;
+  for (const key of allApiKeys) {
+    const t = keyCooldowns.get(key) || 0;
+    if (t < bestTime) { bestTime = t; bestKey = key; }
+  }
+  console.log(`[KeyPool] All keys on cooldown, using least-cooled key (wait ${Math.round((bestTime - now) / 1000)}s)`);
+  return bestKey;
 }
+
+function markKeyFailed(key, statusCode) {
+  const cooldown = statusCode === 429 ? COOLDOWN_MS : COOLDOWN_MS * 2; // rate limit: 3min, balance/other: 6min
+  keyCooldowns.set(key, Date.now() + cooldown);
+  const masked = key.slice(0, 6) + "..." + key.slice(-4);
+  console.log(`[KeyPool] Key ${masked} cooled down for ${cooldown / 1000}s (HTTP ${statusCode}), ${allApiKeys.length - [...keyCooldowns.values()].filter(t => t > Date.now()).length}/${allApiKeys.length} keys available`);
+}
+
+function markKeyOk(key) {
+  keyCooldowns.delete(key); // clear cooldown on success
+}
+
+console.log(`[KeyPool] Loaded ${allApiKeys.length} API key(s)`);
 
 if (!apiKey) {
   throw new Error("ANTHROPIC_API_KEY is required. Set it in .env or as an environment variable.");
@@ -2252,13 +2287,15 @@ ${chapter.research ? `参考资料：\n${chapter.research}\n` : ""}
 
 async function callClaude(prompt, maxTokens = 8192, retries = 3, useSubKey = false) {
   for (let attempt = 1; attempt <= retries; attempt++) {
+    const key = pickKey(useSubKey);
+    const masked = key.slice(0, 6) + "..." + key.slice(-4);
     try {
-      if (attempt > 1) await delay(2000 * attempt); // backoff: 4s, 6s
+      if (attempt > 1) await delay(2000 * attempt);
       const response = await fetch(apiEndpoint, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-api-key": apiKey,
+          "x-api-key": key,
           "anthropic-version": "2024-10-22",
         },
         body: JSON.stringify({
@@ -2269,17 +2306,19 @@ async function callClaude(prompt, maxTokens = 8192, retries = 3, useSubKey = fal
       });
       if (!response.ok) {
         const errText = await response.text().catch(() => "");
-        if (attempt < retries && (response.status === 400 || response.status === 429 || response.status >= 500)) {
-          console.log(`[LongDoc] API ${response.status}, retry ${attempt}/${retries}...`);
+        markKeyFailed(key, response.status);
+        if (attempt < retries && (response.status === 403 || response.status === 429 || response.status >= 500)) {
+          console.log(`[LongDoc] Key ${masked} failed (${response.status}), switching key and retrying ${attempt}/${retries}...`);
           continue;
         }
         throw new Error(`Claude API ${response.status}: ${errText.slice(0, 200)}`);
       }
+      markKeyOk(key);
       const data = await response.json();
       return (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
     } catch (err) {
       if (attempt < retries && !err.message?.startsWith("Claude API")) {
-        console.log(`[LongDoc] Network error, retry ${attempt}/${retries}:`, err.message);
+        console.log(`[LongDoc] Key ${masked} network error, retry ${attempt}/${retries}:`, err.message);
         continue;
       }
       throw err;
