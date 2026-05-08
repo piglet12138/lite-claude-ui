@@ -105,7 +105,7 @@ const stmts = {
 
   // Messages
   listMessages: db.prepare("SELECT * FROM messages WHERE thread_id = ? ORDER BY seq ASC"),
-  insertMessage: db.prepare("INSERT INTO messages (id, thread_id, role, content, tool_calls, seq) VALUES (?, ?, ?, ?, ?, ?)"),
+  insertMessage: db.prepare("INSERT OR IGNORE INTO messages (id, thread_id, role, content, tool_calls, seq) VALUES (?, ?, ?, ?, ?, ?)"),
   deleteMessagesByThread: db.prepare("DELETE FROM messages WHERE thread_id = ?"),
   getMaxSeq: db.prepare("SELECT COALESCE(MAX(seq), 0) as max_seq FROM messages WHERE thread_id = ?"),
   deleteLastMessage: db.prepare("DELETE FROM messages WHERE thread_id = ? AND seq = (SELECT MAX(seq) FROM messages WHERE thread_id = ?)"),
