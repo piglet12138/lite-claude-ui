@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>What's New — Lite Claude UI</title>
+    <title>What's New — Claude AI Harness</title>
     <link rel="icon" href="/logo.svg" type="image/svg+xml" />
     <style>
       :root {
@@ -62,14 +62,20 @@
 
       /* page title */
       .page-title {
-        margin: 40px 0 8px;
+        margin: 40px 0 4px;
         font-size: 38px;
         font-weight: 720;
         line-height: 1.15;
       }
-      .page-desc {
+      .page-subtitle {
+        font-size: 22px;
+        font-weight: 500;
         color: var(--muted);
-        font-size: 17px;
+        margin: 0 0 6px;
+      }
+      .page-desc {
+        color: var(--faint);
+        font-size: 15px;
         margin: 0 0 40px;
       }
 
@@ -92,7 +98,6 @@
       }
       .entry:last-child { margin-bottom: 0; }
 
-      /* timeline dot */
       .entry::before {
         content: '';
         position: absolute;
@@ -113,7 +118,6 @@
         font-size: 13px;
         font-weight: 650;
         color: var(--faint);
-        text-transform: uppercase;
         letter-spacing: 0.03em;
         margin-bottom: 6px;
       }
@@ -122,8 +126,13 @@
       .entry-title {
         font-size: 20px;
         font-weight: 680;
-        margin-bottom: 8px;
+        margin-bottom: 4px;
         line-height: 1.3;
+      }
+      .entry-title-zh {
+        font-size: 15px;
+        color: var(--muted);
+        margin-bottom: 8px;
       }
 
       .entry-body {
@@ -131,11 +140,13 @@
         font-size: 15px;
         line-height: 1.7;
       }
+      .entry-body .zh { display: block; margin-bottom: 4px; }
+      .entry-body .en { display: block; font-size: 13.5px; color: var(--faint); }
       .entry-body ul {
         margin: 8px 0 0;
         padding-left: 20px;
       }
-      .entry-body li { margin-bottom: 4px; }
+      .entry-body li { margin-bottom: 6px; }
 
       .tag {
         display: inline-block;
@@ -150,7 +161,6 @@
       .tag-fix { background: rgba(180, 120, 40, 0.1); color: #9a6a20; }
       .tag-perf { background: rgba(80, 100, 180, 0.1); color: #4a5aaa; }
 
-      /* footer */
       footer {
         display: flex;
         flex-wrap: wrap;
@@ -166,6 +176,7 @@
 
       @media (max-width: 640px) {
         .page-title { font-size: 28px; }
+        .page-subtitle { font-size: 18px; }
         .entry-title { font-size: 17px; }
         nav { gap: 10px; font-size: 13px; }
       }
@@ -175,7 +186,7 @@
     <header>
       <a class="brand" href="/">
         <img src="/logo.svg" alt="" />
-        <span>Lite Claude UI</span>
+        <span>Claude AI Harness</span>
       </a>
       <nav aria-label="Primary">
         <a href="/">Home</a>
@@ -185,101 +196,119 @@
 
     <main>
       <h1 class="page-title">What's New</h1>
-      <p class="page-desc">Latest updates, features, and improvements.</p>
+      <p class="page-subtitle">最近更新</p>
+      <p class="page-desc">Latest updates, features, and improvements. / 最新功能与改进一览。</p>
 
       <div class="timeline">
 
         <div class="entry highlight">
-          <div class="entry-date">May 14, 2026</div>
+          <div class="entry-date">2026-05-14</div>
           <div class="entry-title"><span class="tag tag-feat">feat</span> Office File Generation</div>
+          <div class="entry-title-zh">Office 文件生成</div>
           <div class="entry-body">
-            Generate Word (.docx), Excel (.xlsx), and PowerPoint (.pptx) files directly from conversation. The AI can create structured documents, spreadsheets with data, and presentations — all downloadable from the artifact panel.
+            <span class="zh">在对话中直接生成 Word (.docx)、Excel (.xlsx) 和 PowerPoint (.pptx) 文件，在 Artifact 面板中一键下载。</span>
+            <span class="en">Generate Word, Excel, and PowerPoint files directly from conversation. Download from the artifact panel.</span>
           </div>
         </div>
 
         <div class="entry">
-          <div class="entry-date">May 12, 2026</div>
+          <div class="entry-date">2026-05-12</div>
           <div class="entry-title"><span class="tag tag-feat">feat</span> Usage Tracking &amp; Admin Panel</div>
+          <div class="entry-title-zh">用量追踪与管理后台</div>
           <div class="entry-body">
-            Per-user token usage tracking with a dedicated admin panel tab. Admins can now monitor API consumption across all accounts with monthly breakdowns.
+            <span class="zh">新增按用户统计的 Token 用量面板，管理员可查看所有账户的月度 API 消耗。</span>
+            <span class="en">Per-user token usage tracking with a dedicated admin panel tab and monthly breakdowns.</span>
           </div>
         </div>
 
         <div class="entry">
-          <div class="entry-date">May 11, 2026</div>
+          <div class="entry-date">2026-05-11</div>
           <div class="entry-title"><span class="tag tag-fix">fix</span> Matplotlib &amp; Chart Rendering</div>
+          <div class="entry-title-zh">图表渲染修复</div>
           <div class="entry-body">
             <ul>
-              <li>Auto-register Chinese fonts for matplotlib code execution</li>
-              <li>Prevent duplicate documents on regeneration</li>
-              <li>Fix chart display cutoff in artifact panel</li>
+              <li><span class="zh">自动注册中文字体，代码执行中的 matplotlib 图表正确显示中文</span><span class="en">Auto-register Chinese fonts for matplotlib code execution</span></li>
+              <li><span class="zh">修复重复生成文档和图表显示截断的问题</span><span class="en">Fix duplicate documents and chart display cutoff</span></li>
             </ul>
           </div>
         </div>
 
         <div class="entry">
-          <div class="entry-date">May 10, 2026</div>
-          <div class="entry-title"><span class="tag tag-feat">feat</span> Inline Charts &amp; Bug Report Improvements</div>
+          <div class="entry-date">2026-05-10</div>
+          <div class="entry-title"><span class="tag tag-feat">feat</span> Inline Charts &amp; Bug Report</div>
+          <div class="entry-title-zh">内联图表与 Bug 反馈增强</div>
           <div class="entry-body">
-            Matplotlib charts now render inline in the chat stream. Bug reports support image upload, paste, and drag-drop for visual context.
+            <span class="zh">Matplotlib 图表直接在聊天流中渲染；Bug 反馈支持图片上传、粘贴和拖拽。</span>
+            <span class="en">Matplotlib charts render inline in chat. Bug reports support image upload, paste, and drag-drop.</span>
           </div>
         </div>
 
         <div class="entry">
-          <div class="entry-date">May 9, 2026</div>
+          <div class="entry-date">2026-05-09</div>
           <div class="entry-title"><span class="tag tag-perf">perf</span> Reduced Waiting Anxiety</div>
+          <div class="entry-title-zh">缓解等待焦虑</div>
           <div class="entry-body">
-            New progress bar, elapsed time counter, and rotating tips during AI responses. API key pool with round-robin rotation and temporary cooldown for better reliability.
+            <span class="zh">新增进度条、计时器和轮播提示，减少 AI 响应时的等待焦虑。API Key 池支持轮询和自动冷却。</span>
+            <span class="en">Progress bar, elapsed timer, and rotating tips during AI responses. API key pool with round-robin rotation.</span>
           </div>
         </div>
 
         <div class="entry">
-          <div class="entry-date">May 8, 2026</div>
+          <div class="entry-date">2026-05-08</div>
           <div class="entry-title"><span class="tag tag-feat">feat</span> Sharing &amp; Mobile Document Access</div>
+          <div class="entry-title-zh">分享功能与移动端文档访问</div>
           <div class="entry-body">
             <ul>
-              <li>Generate temporary share links for artifacts (24h expiry)</li>
-              <li>Floating action button for document access on mobile</li>
-              <li>Artifacts persist to SQLite — survive page refresh</li>
-              <li>Long document generation now recoverable after disconnect</li>
+              <li><span class="zh">生成临时分享链接（24 小时有效）</span><span class="en">Temporary share links with 24h expiry</span></li>
+              <li><span class="zh">移动端浮动按钮快速访问文档</span><span class="en">Floating action button for mobile document access</span></li>
+              <li><span class="zh">Artifact 持久化到 SQLite，刷新页面不丢失</span><span class="en">Artifacts persist to SQLite — survive page refresh</span></li>
+              <li><span class="zh">长文档生成断线可恢复</span><span class="en">Long document generation recoverable after disconnect</span></li>
             </ul>
           </div>
         </div>
 
         <div class="entry">
-          <div class="entry-date">May 7, 2026</div>
+          <div class="entry-date">2026-05-07</div>
           <div class="entry-title"><span class="tag tag-feat">feat</span> SQLite Storage &amp; Multi-Engine Search</div>
+          <div class="entry-title-zh">SQLite 存储与多引擎搜索</div>
           <div class="entry-body">
-            Migrated from localStorage-only to SQLite backend for conversations, documents, and usage data. Web search now supports 5-engine fallback chain: Serper, Tavily, Brave, Google CSE, and DuckDuckGo.
+            <span class="zh">从纯 localStorage 迁移到 SQLite 后端，支持对话、文档和用量数据持久化。搜索支持 5 引擎级联回退：Serper → Tavily → Brave → Google CSE → DuckDuckGo。</span>
+            <span class="en">Migrated to SQLite backend. Web search supports 5-engine fallback chain.</span>
             <ul>
-              <li>Long document generation with parallel chapter writing</li>
-              <li>DOCX export for generated documents</li>
-              <li>Mobile-optimized responsive layout</li>
+              <li><span class="zh">长文档并行分章生成</span><span class="en">Long document generation with parallel chapter writing</span></li>
+              <li><span class="zh">DOCX 导出</span><span class="en">DOCX export for generated documents</span></li>
+              <li><span class="zh">移动端响应式布局优化</span><span class="en">Mobile-optimized responsive layout</span></li>
             </ul>
           </div>
         </div>
 
         <div class="entry">
-          <div class="entry-date">May 6, 2026</div>
+          <div class="entry-date">2026-05-06</div>
           <div class="entry-title"><span class="tag tag-feat">feat</span> Multi-User Accounts &amp; Bug Reports</div>
+          <div class="entry-title-zh">多用户系统与 Bug 反馈</div>
           <div class="entry-body">
-            User registration and login system with session management. Built-in bug report feature so users can flag issues directly from the app.
+            <span class="zh">用户注册与登录，Session 管理。内置 Bug 反馈功能，用户可直接在应用内提交问题。</span>
+            <span class="en">User registration and login with session management. Built-in bug report feature.</span>
           </div>
         </div>
 
         <div class="entry">
-          <div class="entry-date">May 5, 2026</div>
+          <div class="entry-date">2026-05-05</div>
           <div class="entry-title"><span class="tag tag-feat">feat</span> Dual Theme &amp; Code Interpreter</div>
+          <div class="entry-title-zh">双主题与代码解释器</div>
           <div class="entry-body">
-            Major UX overhaul introducing light/dark theme toggle, sandboxed JavaScript code execution, and a document management sidebar with version tracking.
+            <span class="zh">大版本 UX 升级：日/夜主题切换、沙盒 JavaScript 代码执行、文档管理侧栏与版本追踪。</span>
+            <span class="en">Major UX overhaul — light/dark theme, sandboxed JS execution, document sidebar with versioning.</span>
           </div>
         </div>
 
         <div class="entry">
-          <div class="entry-date">May 4, 2026</div>
+          <div class="entry-date">2026-05-04</div>
           <div class="entry-title"><span class="tag tag-feat">feat</span> Agentic Tool Use Loop</div>
+          <div class="entry-title-zh">Agent 工具调用循环</div>
           <div class="entry-body">
-            The core agentic architecture: Claude iteratively calls tools (web search, code execution, artifact creation) in a loop until the task is complete. Up to 8 rounds per request with 80K context budget management.
+            <span class="zh">核心 Agent 架构上线：Claude 在循环中迭代调用工具（网络搜索、代码执行、Artifact 生成），直到任务完成。单次请求最多 8 轮，80K 上下文预算管理。</span>
+            <span class="en">Core agentic architecture — Claude iteratively calls tools in a loop. Up to 8 rounds per request with 80K context budget.</span>
           </div>
         </div>
 
@@ -287,7 +316,7 @@
     </main>
 
     <footer>
-      <span>Lite Claude UI</span>
+      <span>Claude AI Harness</span>
       <div>
         <a href="/">Home</a>
         <a href="/privacy.html">Privacy Policy</a>
