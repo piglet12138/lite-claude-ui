@@ -1,5 +1,5 @@
 /**
- * SQLite storage layer for Lite Claude UI
+ * SQLite storage layer for Claude AI Harness
  * Uses better-sqlite3 (synchronous, fast, single-file)
  */
 import { createRequire } from "module";

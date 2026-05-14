@@ -32,11 +32,11 @@ export default {
 async function chat(request, env) {
   const body = await request.json();
   const messages = Array.isArray(body.messages) ? body.messages.slice(-24) : [];
-  const upstream = await fetch(`${(env.LUCKY_BASE_URL || "https://luckyapi.chat/v1").replace(/\/$/, "")}/chat/completions`, {
+  const upstream = await fetch(`${(env.ANTHROPIC_BASE_URL || "https://api.anthropic.com/v1").replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${env.LUCKY_API_KEY}`,
+      authorization: `Bearer ${env.ANTHROPIC_API_KEY}`,
     },
     body: JSON.stringify({
       model: env.MODEL || "claude-opus-4-7",
@@ -57,7 +57,7 @@ async function chat(request, env) {
   });
 
   if (!upstream.ok || !upstream.body) {
-    return json({ error: `LuckyAPI error ${upstream.status}`, detail: await upstream.text() }, 502);
+    return json({ error: `API error ${upstream.status}`, detail: await upstream.text() }, 502);
   }
 
   const stream = new ReadableStream({

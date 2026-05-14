@@ -1,9 +1,9 @@
-name = "lite-claude-ui"
+name = "claude-ai-harness"
 main = "src/worker.js"
 compatibility_date = "2026-05-04"
 assets = { directory = "./public", binding = "ASSETS" }
 
 [vars]
-LUCKY_BASE_URL = "https://luckyapi.chat/v1"
+ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
 MODEL = "claude-opus-4-7"
 ACCESS_EMAIL = "admin@example.com"

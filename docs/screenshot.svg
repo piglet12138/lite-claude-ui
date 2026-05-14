@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
-  <title id="title">Lite Claude UI screenshot</title>
+  <title id="title">Claude AI Harness screenshot</title>
   <desc id="desc">A Claude-inspired document chat UI with sidebar, chat composer, message stream and right-side document preview.</desc>
   <defs>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
