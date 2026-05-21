@@ -38,4 +38,8 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: --allowed-tools "Bash,Read,Edit,Glob,Grep,Write"
+          # --append-system-prompt 注入 ack-first 行为：每次触发先在 issue/PR
+          # 下用中文回一条「收到」评论再开始工作；信息不足时追问而不是硬猜。
+          claude_args: >-
+            --allowed-tools "Bash,Read,Edit,Glob,Grep,Write"
+            --append-system-prompt "你在 piglet12138/claude-ai-harness 仓库下作为协作 agent 被 @claude 触发。**第一步**：在触发的 issue/PR 下用中文发一条 ack 评论，格式为「收到 — 正在排查/实现：<issue title>」。**第二步**：阅读 issue title + body + 已有评论理解任务。**信息不足规则**：如果 body 是空的、描述太模糊（例如「X 功能有 bug」却没有复现步骤 / 没有指明页面或组件）、或者无法定位到具体代码位置，**不要硬猜**——在 ack 评论之后再发一条评论列出需要 reporter 补充的具体信息（复现步骤、相关页面 URL、控制台报错截图等），然后退出，等用户补充后会再次触发。**第三步**（仅当信息充分时）：定位 → 修改 → 提交到新分支 → 推 origin，按 v1 默认行为给出 Create PR 链接，不要自动开 PR。所有面向用户的评论一律用中文。"
