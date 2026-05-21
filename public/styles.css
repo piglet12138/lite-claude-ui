@@ -2261,6 +2261,68 @@ img.brand-logo.large {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   Code Block with Toolbar
+   ═══════════════════════════════════════════════════════════════ */
+
+.code-block-wrapper {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 10px 0;
+}
+
+.code-block-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  background: rgba(128, 128, 128, 0.04);
+  border-bottom: 1px solid var(--line);
+}
+
+.code-block-lang {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--faint);
+  text-transform: lowercase;
+}
+
+.code-block-copy {
+  font-size: 11px;
+  color: var(--faint);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.code-block-copy:hover {
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
+.code-block-wrapper pre {
+  margin: 0;
+  border-radius: 0;
+  border: none;
+  padding: 12px 14px;
+  background: var(--code-bg);
+  overflow: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.code-block-wrapper code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-family: inherit;
+}
+
+/* ═══════════════════════════════════════════════════════════════
    Icons (CSS-only)
    ═══════════════════════════════════════════════════════════════ */
 
