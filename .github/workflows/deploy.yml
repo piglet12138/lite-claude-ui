@@ -1,0 +1,74 @@
+name: Deploy · DO (claude-lite.service)
+
+# main-only: ssh into DO, git pull on /root/claude-docs-candidates/claude-lite,
+# reinstall deps if package-lock changed, restart claude-lite.service.
+# .env on the box is preserved (gitignored).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-do
+  cancel-in-progress: false  # never abort a deploy mid-flight
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Push to DO and restart service
+        env:
+          SSH_KEY:  ${{ secrets.DO_SSH_KEY }}
+          HOST:     ${{ secrets.DO_HOST }}
+          SSH_USER: ${{ secrets.DO_USER }}
+          SHA:      ${{ github.sha }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i ~/.ssh/id_deploy "${SSH_USER}@${HOST}" bash <<EOF
+          set -euo pipefail
+          cd /root/claude-docs-candidates/claude-lite
+
+          echo "--- before ---"
+          git log -1 --oneline
+
+          # Stash any in-place dev edits (rare on prod, but safe). Untracked
+          # data files (.env, *.jsonl, bug-images/, ...) are not touched.
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            git stash push -m "auto-stash-\$(date +%s)"
+          fi
+
+          OLD_LOCK_HASH=\$(sha1sum package-lock.json | cut -d' ' -f1)
+          git fetch origin main
+          git reset --hard "$SHA"
+          NEW_LOCK_HASH=\$(sha1sum package-lock.json | cut -d' ' -f1)
+
+          echo "--- after ---"
+          git log -1 --oneline
+
+          if [ "\$OLD_LOCK_HASH" != "\$NEW_LOCK_HASH" ]; then
+            echo "package-lock.json changed; running npm ci --omit=dev"
+            PATH=\$HOME/.nvm/versions/node/v22.22.2/bin:\$PATH npm ci --omit=dev
+          else
+            echo "package-lock.json unchanged; skipping npm ci"
+          fi
+
+          systemctl restart claude-lite.service
+          sleep 2
+          systemctl is-active claude-lite.service
+          EOF
+
+      - name: Smoke check public URL
+        run: |
+          for i in $(seq 1 10); do
+            sleep 1
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://claude.yaoyuheng2001.me/ || echo "000")
+            [ "$code" = "200" ] && { echo "Public site healthy (HTTP $code)"; exit 0; }
+          done
+          echo "::error::Public site did not return 200 after deploy"
+          exit 1
