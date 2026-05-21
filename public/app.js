@@ -15,6 +15,7 @@ const state = {
   docAutoOpenSuppressedThreadId: "",
   expectDocument: false,
   webSearchEnabled: false,
+  searchQuery: "",
 };
 
 // Migration: move global documents into their threads
@@ -484,6 +485,7 @@ function showLogin() {
 async function showChat() {
   els.loginView.classList.add("hidden");
   els.chatView.classList.remove("hidden");
+  initSidebarSearch();
   // Load threads from server (SQLite)
   try {
     const serverThreads = await fetchJson("/api/threads");
@@ -727,15 +729,90 @@ function renderDocFab() {
   fab.innerHTML = `<span class="doc-fab-icon">◆</span><span class="doc-fab-label">${escapeHtml(latest.slice(0, 12))}${latest.length > 12 ? "…" : ""}${count > 1 ? " +" + (count - 1) : ""}</span>`;
 }
 
+function threadMatchesSearch(thread, query) {
+  if ((thread.title || "").toLowerCase().includes(query)) return true;
+  for (const msg of (thread.messages || [])) {
+    const content = typeof msg.content === "string" ? msg.content : "";
+    if (content.toLowerCase().includes(query)) return true;
+  }
+  return false;
+}
+
+function highlightText(text, query) {
+  if (!query) return escapeHtml(text);
+  const q = query.toLowerCase();
+  const lower = text.toLowerCase();
+  let result = "";
+  let pos = 0;
+  while (pos < text.length) {
+    const idx = lower.indexOf(q, pos);
+    if (idx === -1) { result += escapeHtml(text.slice(pos)); break; }
+    result += escapeHtml(text.slice(pos, idx));
+    result += `<mark class="search-highlight">${escapeHtml(text.slice(idx, idx + q.length))}</mark>`;
+    pos = idx + q.length;
+  }
+  return result;
+}
+
+function initSidebarSearch() {
+  if (document.querySelector("#sidebarSearch")) return;
+  const sidebar = document.querySelector(".sidebar");
+  const navLabel = sidebar?.querySelector(".nav-label");
+  if (!sidebar || !navLabel) return;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "sidebar-search";
+
+  const icon = document.createElement("span");
+  icon.className = "sidebar-search-icon";
+  icon.setAttribute("aria-hidden", "true");
+
+  const input = document.createElement("input");
+  input.id = "sidebarSearch";
+  input.type = "text";
+  input.placeholder = "搜索对话";
+  input.className = "sidebar-search-input";
+  input.autocomplete = "off";
+
+  const clearBtn = document.createElement("button");
+  clearBtn.type = "button";
+  clearBtn.className = "sidebar-search-clear hidden";
+  clearBtn.setAttribute("aria-label", "清空搜索");
+  clearBtn.textContent = "×";
+
+  wrapper.append(icon, input, clearBtn);
+  sidebar.insertBefore(wrapper, navLabel);
+
+  input.addEventListener("input", () => {
+    state.searchQuery = input.value;
+    clearBtn.classList.toggle("hidden", !input.value);
+    renderThreads();
+  });
+
+  clearBtn.addEventListener("click", () => {
+    input.value = "";
+    state.searchQuery = "";
+    clearBtn.classList.add("hidden");
+    renderThreads();
+    input.focus();
+  });
+}
+
 function renderThreads() {
   els.threadList.innerHTML = "";
-  const visible = state.threads.filter((t) => !t.archived);
+  const query = state.searchQuery.trim().toLowerCase();
+  const visible = state.threads.filter((t) => !t.archived && (!query || threadMatchesSearch(t, query)));
   for (const thread of visible) {
     const item = document.createElement("div");
     item.className = `thread-item${thread.id === state.activeId ? " active" : ""}`;
     const label = document.createElement("span");
     label.className = "thread-label";
-    label.textContent = thread.title || "新对话";
+    const titleText = thread.title || "新对话";
+    if (query) {
+      label.innerHTML = highlightText(titleText, query);
+    } else {
+      label.textContent = titleText;
+    }
     item.append(label);
 
     const more = document.createElement("button");
@@ -764,6 +841,12 @@ function renderThreads() {
       loadThreadData(thread.id, true);
     });
     els.threadList.append(item);
+  }
+  if (visible.length === 0 && query) {
+    const empty = document.createElement("div");
+    empty.className = "thread-item thread-search-empty";
+    empty.textContent = "没有匹配的对话";
+    els.threadList.append(empty);
   }
   // Show archived count if any
   const archivedCount = state.threads.filter((t) => t.archived).length;
