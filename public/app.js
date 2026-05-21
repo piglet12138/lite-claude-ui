@@ -2952,7 +2952,8 @@ function renderRichDocument(markdown, mode = "document") {
     if (line.startsWith("```")) {
       if (inCode) {
         const lang = codeLang;
-        const codeContent = `<pre><code${lang ? ` class="language-${lang}"` : ""}>${code.join("\n")}</code></pre>`;
+        const rawCode = code.join("\n").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"');
+        const codeContent = `<pre><code${lang ? ` class="language-${lang}"` : ""}>${highlightCode(rawCode, lang)}</code></pre>`;
         const toolbar = `<div class="code-block-toolbar"><span class="code-block-lang">${lang}</span><button type="button" class="code-block-copy" onclick="copyCodeBlock(this)">复制</button></div>`;
         out.push(`<div class="code-block-wrapper">${toolbar}${codeContent}</div>`);
         code = [];
@@ -3028,6 +3029,100 @@ function copyCodeBlock(btn) {
     btn.textContent = "已复制";
     setTimeout(() => { btn.textContent = "复制"; }, 1000);
   }).catch(() => {});
+}
+
+// ─── Syntax Highlighting ────────────────────────────────────────────────────
+
+const _HL_LANG_ALIAS = { javascript: "js", typescript: "ts", python: "py", bash: "sh", zsh: "sh", shell: "sh", markdown: "md" };
+
+function highlightCode(raw, lang) {
+  const L = _HL_LANG_ALIAS[lang] || lang || "";
+  const rules = _getHighlightRules(L);
+  if (!rules) return escapeHtml(raw);
+  // Convert inner capturing groups to non-capturing so group indices align with rules array
+  const src = rules.map(([, r]) => `(${r.source.replace(/\((?!\?)/g, "(?:")})`).join("|");
+  const re = new RegExp(src, "gs");
+  let out = "", last = 0;
+  for (const m of raw.matchAll(re)) {
+    if (m.index > last) out += escapeHtml(raw.slice(last, m.index));
+    const idx = m.slice(1).findIndex((g) => g !== undefined);
+    out += `<span class="tok-${rules[idx][0]}">${escapeHtml(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  if (last < raw.length) out += escapeHtml(raw.slice(last));
+  return out;
+}
+
+function _getHighlightRules(L) {
+  const JS_KW = /\b(async|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|false|finally|for|from|function|get|if|import|in|instanceof|let|new|null|of|return|set|static|super|switch|this|throw|true|try|typeof|undefined|var|void|while|with|yield)\b/;
+  const TS_KW = /\b(any|as|boolean|declare|enum|implements|interface|keyof|namespace|never|number|object|private|protected|public|readonly|satisfies|string|symbol|type|unknown)\b/;
+  const PY_KW = /\b(and|as|assert|async|await|break|class|continue|def|del|elif|else|except|False|finally|for|from|global|if|import|in|is|lambda|None|nonlocal|not|or|pass|raise|return|True|try|while|with|yield)\b/;
+  const SH_KW = /\b(break|case|continue|do|done|echo|elif|else|esac|exit|export|fi|for|function|if|in|local|readonly|return|set|shift|source|then|trap|true|false|unset|while)\b/;
+  const SQL_KW = /\b(ADD|ALL|ALTER|AND|AS|ASC|BETWEEN|BY|CASE|COLUMN|CREATE|DELETE|DESC|DISTINCT|DROP|ELSE|END|EXISTS|FALSE|FROM|GROUP|HAVING|IN|INDEX|INNER|INSERT|INTO|IS|JOIN|KEY|LEFT|LIKE|LIMIT|NOT|NULL|OFFSET|ON|OR|ORDER|OUTER|PRIMARY|REFERENCES|RIGHT|SELECT|SET|TABLE|THEN|TRUE|UNION|UNIQUE|UPDATE|VALUES|VIEW|WHEN|WHERE|WITH|add|all|alter|and|as|asc|between|by|case|column|create|delete|desc|distinct|drop|else|end|exists|false|from|group|having|in|index|inner|insert|into|is|join|key|left|like|limit|not|null|offset|on|or|order|outer|primary|references|right|select|set|table|then|true|union|unique|update|values|view|when|where|with)\b/;
+  if (["js", "jsx"].includes(L)) return [
+    ["cmt", /\/\/[^\n]*/],
+    ["cmt", /\/\*[\s\S]*?\*\//],
+    ["str", /`(?:[^`\\]|\\.)*`/],
+    ["str", /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/],
+    ["num", /\b0x[\da-fA-F]+\b|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/],
+    ["kw",  JS_KW],
+    ["fn",  /\b([A-Za-z_$][\w$]*)(?=\s*\()/],
+  ];
+  if (["ts", "tsx"].includes(L)) return [
+    ["cmt", /\/\/[^\n]*/],
+    ["cmt", /\/\*[\s\S]*?\*\//],
+    ["str", /`(?:[^`\\]|\\.)*`/],
+    ["str", /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/],
+    ["num", /\b0x[\da-fA-F]+\b|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/],
+    ["kw",  TS_KW],
+    ["kw",  JS_KW],
+    ["fn",  /\b([A-Za-z_$][\w$]*)(?=\s*\()/],
+  ];
+  if (L === "json") return [
+    ["key", /"(?:[^"\\]|\\.)*"(?=\s*:)/],
+    ["str", /"(?:[^"\\]|\\.)*"/],
+    ["kw",  /\b(true|false|null)\b/],
+    ["num", /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/],
+  ];
+  if (L === "html") return [
+    ["cmt", /<!--[\s\S]*?-->/],
+    ["kw",  /<\/?[A-Za-z][A-Za-z0-9-]*/],
+    ["attr", /\b[A-Za-z][A-Za-z0-9-:]*(?=\s*=)/],
+    ["str", /"[^"]*"|'[^']*'/],
+    ["punct", /[<>/?]/],
+  ];
+  if (L === "css") return [
+    ["cmt", /\/\*[\s\S]*?\*\//],
+    ["str", /"[^"]*"|'[^']*'/],
+    ["num", /#[\da-fA-F]{3,8}\b/],
+    ["num", /(?<!\w)-?\.?\d+(?:\.\d+)?(?:px|em|rem|vh|vw|vmin|vmax|%|s|ms|deg|fr|pt|ch|ex|cm|mm|in)\b/],
+    ["fn",  /\b[A-Za-z-]+(?=\s*\()/],
+    ["attr", /--[A-Za-z][\w-]*/],
+    ["sel", /[.#][A-Za-z_-][\w-]*/],
+    ["kw",  /\b(auto|block|bold|flex|grid|inherit|initial|inline|italic|none|normal|relative|absolute|fixed|sticky|transparent|unset)\b/],
+  ];
+  if (L === "py") return [
+    ["cmt", /#[^\n]*/],
+    ["str", /"""[\s\S]*?"""|'''[\s\S]*?'''/],
+    ["str", /f?"(?:[^"\\\n]|\\.)*"|f?'(?:[^'\\\n]|\\.)*'/],
+    ["num", /\b0x[\da-fA-F]+\b|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/],
+    ["kw",  PY_KW],
+    ["fn",  /\b([A-Za-z_][\w]*)(?=\s*\()/],
+  ];
+  if (L === "sh") return [
+    ["cmt", /#[^\n]*/],
+    ["str", /"(?:[^"\\\n]|\\.)*"|'[^']*'/],
+    ["num", /\b\d+\b/],
+    ["kw",  SH_KW],
+  ];
+  if (L === "sql") return [
+    ["cmt", /--[^\n]*|\/\*[\s\S]*?\*\//],
+    ["str", /'(?:[^'\\]|\\.)*'/],
+    ["num", /\b\d+(?:\.\d+)?\b/],
+    ["kw",  SQL_KW],
+    ["fn",  /\b[A-Za-z_]\w*(?=\s*\()/],
+  ];
+  return null;
 }
 
 function isTableStart(lines, index) {
