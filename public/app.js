@@ -2735,25 +2735,30 @@ function renderRichDocument(markdown, mode = "document") {
   const lines = escapeHtml(markdown).split(/\n/);
   const out = [];
   let inList = false;
+  let inOList = false;
   let inCode = false;
+  let codeLang = "";
   let code = [];
 
   const closeList = () => {
-    if (inList) {
-      out.push("</ul>");
-      inList = false;
-    }
+    if (inList) { out.push("</ul>"); inList = false; }
+    if (inOList) { out.push("</ol>"); inOList = false; }
   };
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     if (line.startsWith("```")) {
       if (inCode) {
-        out.push(`<pre><code>${code.join("\n")}</code></pre>`);
+        const lang = codeLang;
+        const codeContent = `<pre><code${lang ? ` class="language-${lang}"` : ""}>${code.join("\n")}</code></pre>`;
+        const toolbar = `<div class="code-block-toolbar"><span class="code-block-lang">${lang}</span><button type="button" class="code-block-copy" onclick="copyCodeBlock(this)">复制</button></div>`;
+        out.push(`<div class="code-block-wrapper">${toolbar}${codeContent}</div>`);
         code = [];
+        codeLang = "";
         inCode = false;
       } else {
         closeList();
+        codeLang = line.slice(3).trim();
         inCode = true;
       }
       continue;
@@ -2788,11 +2793,13 @@ function renderRichDocument(markdown, mode = "document") {
       closeList();
       out.push(`<blockquote>${inline(line.slice(5))}</blockquote>`);
     } else if (/^[-*]\s+/.test(line)) {
-      if (!inList) {
-        out.push("<ul>");
-        inList = true;
-      }
+      if (inOList) { out.push("</ol>"); inOList = false; }
+      if (!inList) { out.push("<ul>"); inList = true; }
       out.push(`<li>${inline(line.replace(/^[-*]\s+/, ""))}</li>`);
+    } else if (/^\d+\.\s+/.test(line)) {
+      if (inList) { out.push("</ul>"); inList = false; }
+      if (!inOList) { out.push("<ol>"); inOList = true; }
+      out.push(`<li>${inline(line.replace(/^\d+\.\s+/, ""))}</li>`);
     } else if (line.trim()) {
       closeList();
       out.push(`<p>${inline(line)}</p>`);
@@ -2805,7 +2812,20 @@ function renderRichDocument(markdown, mode = "document") {
 }
 
 function inline(text) {
-  return text.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  return text
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*\n]+?)\*/g, "<em>$1</em>")
+    .replace(/(?<![A-Za-z\d])_([^_\n]+?)_(?![A-Za-z\d])/g, "<em>$1</em>")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+
+function copyCodeBlock(btn) {
+  const code = btn.closest(".code-block-wrapper").querySelector("code").textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = "已复制";
+    setTimeout(() => { btn.textContent = "复制"; }, 1000);
+  }).catch(() => {});
 }
 
 function isTableStart(lines, index) {
