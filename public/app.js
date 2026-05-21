@@ -216,6 +216,83 @@ function wireEvents() {
       els.prompt.focus();
     });
   });
+
+  // Drag-and-drop file upload on the main chat column
+  const chatColumn = document.querySelector(".chat-column");
+  if (chatColumn) {
+    chatColumn.addEventListener("dragenter", handleDragEnter);
+    chatColumn.addEventListener("dragover", handleDragOver);
+    chatColumn.addEventListener("dragleave", handleDragLeave);
+    chatColumn.addEventListener("drop", handleDrop);
+  }
+
+  // Keyboard shortcuts
+  document.addEventListener("keydown", handleKeyboardShortcut);
+}
+
+let _dragDepth = 0;
+
+function handleDragEnter(e) {
+  e.preventDefault();
+  if (!state.authenticated) return;
+  _dragDepth++;
+  document.querySelector(".chat-column")?.classList.add("drag-over");
+}
+
+function handleDragOver(e) {
+  e.preventDefault();
+}
+
+function handleDragLeave() {
+  _dragDepth--;
+  if (_dragDepth <= 0) {
+    _dragDepth = 0;
+    document.querySelector(".chat-column")?.classList.remove("drag-over");
+  }
+}
+
+async function handleDrop(e) {
+  e.preventDefault();
+  _dragDepth = 0;
+  document.querySelector(".chat-column")?.classList.remove("drag-over");
+  if (!state.authenticated) return;
+  const files = Array.from(e.dataTransfer.files).slice(0, 6);
+  if (!files.length) return;
+  for (const file of files) {
+    await addFileAttachment(file);
+  }
+  saveDocuments();
+  render();
+}
+
+function handleKeyboardShortcut(e) {
+  if (!state.authenticated) return;
+  const tag = document.activeElement?.tagName?.toLowerCase();
+  const isEditing = tag === "textarea" || tag === "input" || document.activeElement?.isContentEditable;
+
+  // Cmd/Ctrl+N: new conversation (skip if typing in an input)
+  if ((e.metaKey || e.ctrlKey) && e.key === "n" && !isEditing) {
+    e.preventDefault();
+    state.docAutoOpenSuppressedThreadId = "";
+    createThread();
+    render();
+    return;
+  }
+
+  // Esc: close document panel if open
+  if (e.key === "Escape" && state.docOpen) {
+    state.docOpen = false;
+    state.docAutoOpenSuppressedThreadId = state.activeId;
+    renderDocumentPanel();
+    renderDocFab();
+    return;
+  }
+
+  // Cmd/Ctrl+K: focus the prompt input
+  if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+    e.preventDefault();
+    els.prompt?.focus();
+  }
 }
 
 async function login(event) {

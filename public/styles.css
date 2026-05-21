@@ -790,6 +790,37 @@ img.brand-logo.large {
   grid-template-rows: minmax(0, 1fr) auto;
   row-gap: 12px;
   overflow: hidden;
+  position: relative;
+}
+
+.chat-column.drag-over::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--accent-glow);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  z-index: 100;
+  pointer-events: none;
+}
+
+.chat-column.drag-over::after {
+  content: '松开手放下文件';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--paper);
+  color: var(--accent);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 10px 24px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  z-index: 101;
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 /* ═══════════════════════════════════════════════════════════════
