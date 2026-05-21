@@ -3005,3 +3005,116 @@ img.brand-logo.large {
 }
 .share-copy-btn:hover { opacity: 0.9; }
 .share-close-btn:hover { background: var(--bg); }
+
+/* ─── Inline Modal (replaces window.prompt / window.confirm) ─── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: modal-overlay-in 0.15s ease;
+}
+
+@keyframes modal-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.modal-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 24px;
+  min-width: 300px;
+  max-width: 420px;
+  width: 90vw;
+  animation: modal-card-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modal-card-in {
+  from { opacity: 0; transform: scale(0.92) translateY(10px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);    }
+}
+
+.modal-title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  margin: 0 0 12px;
+}
+
+.modal-message {
+  font-size: 14px;
+  color: var(--ink);
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+
+.modal-input {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 14px;
+  font-family: var(--font-body);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  outline: none;
+  margin-bottom: 16px;
+  transition: border-color 0.15s;
+}
+
+.modal-input:focus {
+  border-color: var(--accent);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modal-btn {
+  padding: 8px 18px;
+  font-size: 13px;
+  font-family: var(--font-body);
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.modal-btn-cancel {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.modal-btn-cancel:hover {
+  background: rgba(128, 128, 128, 0.08);
+}
+
+.modal-btn-confirm {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+}
+
+.modal-btn-confirm:hover {
+  background: var(--accent-dark);
+}
+
+.modal-btn-confirm.danger {
+  background: #d84040;
+}
+
+.modal-btn-confirm.danger:hover {
+  background: #b83030;
+}

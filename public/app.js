@@ -736,9 +736,90 @@ function showContextMenu(anchor, items) {
   setTimeout(() => document.addEventListener("click", close, true), 0);
 }
 
-function deleteThread(id) {
+// ─── Inline Modal (themed replacement for window.prompt / window.confirm) ───
+
+function showModal({ title, message, inputDefault, isPrompt, danger }) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const card = document.createElement("div");
+    card.className = "modal-card";
+
+    if (title || message) {
+      const label = document.createElement(isPrompt ? "h3" : "p");
+      label.className = isPrompt ? "modal-title" : "modal-message";
+      label.textContent = title || message;
+      card.append(label);
+    }
+
+    let input;
+    if (isPrompt) {
+      input = document.createElement("input");
+      input.className = "modal-input";
+      input.type = "text";
+      input.value = inputDefault || "";
+      card.append(input);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "modal-btn modal-btn-cancel";
+    cancelBtn.textContent = "取消";
+    cancelBtn.type = "button";
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.className = `modal-btn modal-btn-confirm${danger ? " danger" : ""}`;
+    confirmBtn.textContent = "确定";
+    confirmBtn.type = "button";
+
+    actions.append(cancelBtn, confirmBtn);
+    card.append(actions);
+    overlay.append(card);
+    document.body.append(overlay);
+
+    if (isPrompt && input) {
+      input.focus();
+      input.select();
+    } else {
+      confirmBtn.focus();
+    }
+
+    function done(result) {
+      if (resolved) return;
+      resolved = true;
+      document.removeEventListener("keydown", keyHandler);
+      overlay.remove();
+      resolve(result);
+    }
+
+    function keyHandler(e) {
+      if (e.key === "Escape") { e.preventDefault(); done(isPrompt ? null : false); }
+      else if (e.key === "Enter" && e.target !== cancelBtn) { e.preventDefault(); done(isPrompt ? input?.value ?? null : true); }
+    }
+
+    cancelBtn.addEventListener("click", () => done(isPrompt ? null : false));
+    confirmBtn.addEventListener("click", () => done(isPrompt ? input?.value ?? null : true));
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) done(isPrompt ? null : false); });
+    document.addEventListener("keydown", keyHandler);
+  });
+}
+
+function showPromptModal(title, defaultValue) {
+  return showModal({ title, isPrompt: true, inputDefault: defaultValue });
+}
+
+function showConfirmModal(message, { danger = false } = {}) {
+  return showModal({ message, isPrompt: false, danger });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function deleteThread(id) {
+  if (!await showConfirmModal("确定删除这个对话？", { danger: true })) return;
   fetch("/api/threads/" + id, { method: "DELETE" }).catch(() => {});
-  if (!confirm("确定删除这个对话？")) return;
   state.threads = state.threads.filter((t) => t.id !== id);
   if (state.activeId === id) {
     state.activeId = state.threads[0]?.id || "";
@@ -748,10 +829,10 @@ function deleteThread(id) {
   render();
 }
 
-function renameThread(id) {
+async function renameThread(id) {
   const thread = state.threads.find((t) => t.id === id);
   if (!thread) return;
-  const name = prompt("重命名对话：", thread.title || "");
+  const name = await showPromptModal("重命名对话：", thread.title || "");
   if (name === null) return;
   thread.title = name.trim() || "新对话";
   syncThreadMeta(thread.id, { title: thread.title });
@@ -783,8 +864,8 @@ function renderDocuments() {
       e.stopPropagation();
       const thread = activeThread();
       showContextMenu(e.currentTarget, [
-        { label: "重命名", action: () => { const n = prompt("重命名：", doc.title); if (n !== null) { doc.title = n.trim() || doc.title; saveThreads(); render(); } } },
-        { label: "删除", action: () => { if (!confirm(`删除「${doc.title}」？`)) return; thread.documents = (thread.documents || []).filter((d) => d.id !== doc.id); if (state.activeDocId === doc.id) state.activeDocId = (thread.documents[0]?.id) || ""; saveThreads(); render(); }, danger: true },
+        { label: "重命名", action: async () => { const n = await showPromptModal("重命名：", doc.title); if (n !== null) { doc.title = n.trim() || doc.title; saveThreads(); render(); } } },
+        { label: "删除", action: async () => { if (!await showConfirmModal(`删除「${doc.title}」？`, { danger: true })) return; thread.documents = (thread.documents || []).filter((d) => d.id !== doc.id); if (state.activeDocId === doc.id) state.activeDocId = (thread.documents[0]?.id) || ""; saveThreads(); render(); }, danger: true },
       ]);
     });
     item.append(more);
