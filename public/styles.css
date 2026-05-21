@@ -3204,3 +3204,43 @@ img.brand-logo.large {
 .scroll-unread.hidden {
   display: none;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Syntax Highlighting Tokens
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Light theme token colors */
+:root, [data-theme="light"] {
+  --tok-kw:    #7b4ea0;
+  --tok-str:   #4a8a3f;
+  --tok-num:   #1c6bbe;
+  --tok-cmt:   #8a9a7a;
+  --tok-fn:    #b8610a;
+  --tok-key:   #a84040;
+  --tok-attr:  #1c6bbe;
+  --tok-sel:   #7b4ea0;
+  --tok-punct: #666;
+}
+
+/* Dark theme token colors */
+[data-theme="dark"] {
+  --tok-kw:    #c792ea;
+  --tok-str:   #8cc265;
+  --tok-num:   #82aaff;
+  --tok-cmt:   #6a8068;
+  --tok-fn:    #ffcb6b;
+  --tok-key:   #f07178;
+  --tok-attr:  #82aaff;
+  --tok-sel:   #c792ea;
+  --tok-punct: #89ddff;
+}
+
+.tok-kw    { color: var(--tok-kw); font-weight: 500; }
+.tok-str   { color: var(--tok-str); }
+.tok-num   { color: var(--tok-num); }
+.tok-cmt   { color: var(--tok-cmt); font-style: italic; }
+.tok-fn    { color: var(--tok-fn); }
+.tok-key   { color: var(--tok-key); }
+.tok-attr  { color: var(--tok-attr); }
+.tok-sel   { color: var(--tok-sel); }
+.tok-punct { color: var(--tok-punct); }
